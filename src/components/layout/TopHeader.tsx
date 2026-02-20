@@ -66,16 +66,23 @@ export const TopHeader: React.FC = () => {
                 return map[z] || 'C';
             };
 
+            // Phase 1: Filter atoms to ignore Explicit Hydrogens
+            const validAids = new Set<number>();
             atoms.aid.forEach((aid: number, index: number) => {
                 const z = atoms.element[index];
-                const x = coords.x[index] * 40;
-                const y = -coords.y[index] * 40;
                 const element = getSymbol(z);
 
-                const atomId = 'a_' + Math.random().toString(36).substr(2, 9);
-                const atom = new Atom(atomId, element, new Vec2D(x + 400, y + 300));
-                newMol.addAtom(atom);
-                idMap.set(aid, atom.id);
+                // Keep all atoms except terminal Hydrogens
+                if (element !== 'H') {
+                    validAids.add(aid);
+                    const x = coords.x[index] * 40;
+                    const y = -coords.y[index] * 40;
+
+                    const atomId = 'a_' + Math.random().toString(36).substr(2, 9);
+                    const atom = new Atom(atomId, element, new Vec2D(x + 400, y + 300));
+                    newMol.addAtom(atom);
+                    idMap.set(aid, atom.id);
+                }
             });
 
             if (bonds) {
@@ -83,17 +90,20 @@ export const TopHeader: React.FC = () => {
                     const aid2 = bonds.aid2[index];
                     const order = bonds.order[index];
 
-                    const id1 = idMap.get(aid1);
-                    const id2 = idMap.get(aid2);
+                    // Only connect valid heavy atoms
+                    if (validAids.has(aid1) && validAids.has(aid2)) {
+                        const id1 = idMap.get(aid1);
+                        const id2 = idMap.get(aid2);
 
-                    if (id1 && id2) {
-                        let type: any = 'SINGLE';
-                        if (order === 2) type = 'DOUBLE';
-                        if (order === 3) type = 'TRIPLE';
+                        if (id1 && id2) {
+                            let type: any = 'SINGLE';
+                            if (order === 2) type = 'DOUBLE';
+                            if (order === 3) type = 'TRIPLE';
 
-                        const bondId = 'b_' + Math.random().toString(36).substr(2, 9);
-                        const bond = new Bond(bondId, id1, id2, order, type);
-                        newMol.addBond(bond);
+                            const bondId = 'b_' + Math.random().toString(36).substr(2, 9);
+                            const bond = new Bond(bondId, id1, id2, order, type);
+                            newMol.addBond(bond);
+                        }
                     }
                 });
             }

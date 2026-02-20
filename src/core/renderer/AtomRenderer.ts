@@ -12,56 +12,64 @@ export class AtomRenderer {
 
         const hCount = ChemUtils.getImplicitHydrogens(atom.element, bondOrderSum, atom.charge);
 
-        ctx.fillStyle = style.color;
-        ctx.strokeStyle = style.backgroundColor; // Halo matches bg
-        ctx.lineWidth = style.bondWidth * 1.5; // Halo slightly thicker than bond? or fixed?
+        // 1. Determine if we should draw the label at all
+        let shouldDraw = true;
 
-        // Font
+        // Hide standard backbone Carbons
+        if (atom.element === 'C' && connectedBonds.length > 0 && atom.charge === 0) {
+            shouldDraw = false;
+        }
+
+        if (!shouldDraw) return;
+
+        // 2. Construct the single string label (e.g., "OH", "NH2")
+        let mainLabel = atom.element;
+        let subLabel = '';
+
+        if (hCount > 0) {
+            mainLabel += 'H';
+            if (hCount > 1) {
+                subLabel = hCount.toString();
+            }
+        }
+
+        // 3. Draw the combined Text with Halos
         ctx.font = `bold ${style.atomFontSize}px ${style.atomFont}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        // Label Logic
-        let label = atom.element;
-        if (atom.element === 'C' && connectedBonds.length > 0 && hCount === 0 && atom.charge === 0) {
-            // Carbon usually doesn't show label unless terminal or charged or specific
-            // For MVP, let's show all non-carbon, or terminal carbons?
-            // "Terminal atoms on the left... render labels in reverse"
-            // Let's just draw everything for now, filtering C later if needed.
-            // Requirement says "Render atom symbols". It doesn't say "don't render Carbon".
-            // But typical drawing hides C.
-            // Let's Hide C if it has bonds.
-            return;
-        }
+        ctx.fillStyle = style.color;
+        ctx.strokeStyle = style.backgroundColor;
+        ctx.lineWidth = 3; // Clear thick halo
 
-        // Complex label construction
-        // "Terminal atoms on the left... render labels in reverse (H3C)"
-        // Simple heuristic: if x < average x of neighbors, it's on left?
-        // Let's just default to standard center for now, or simple H placement.
+        // Draw Main Label (element + H if any)
+        ctx.strokeText(mainLabel, x, y);
+        ctx.fillText(mainLabel, x, y);
 
-        // Draw Text Halo (to clear bonds behind)
-        ctx.strokeText(label, x, y);
-        ctx.fillText(label, x, y);
+        // Draw Subscripts (e.g., the '2' in NH2)
+        if (subLabel) {
+            const metrics = ctx.measureText(mainLabel);
+            const offset = (metrics.width / 2) + 1;
 
-        // Draw Hydrogens
-        if (hCount > 0) {
-            const hLabel = `H${hCount > 1 ? hCount : ''}`;
-            const metrics = ctx.measureText(label);
-            const offset = metrics.width / 2 + 2;
-
-            // Subscript
-            ctx.font = `${style.subscriptFontSize}px ${style.atomFont}`;
-            ctx.fillText(hLabel, x + offset + 4, y + 4);
+            ctx.font = `bold ${style.subscriptFontSize}px ${style.atomFont}`;
+            ctx.strokeText(subLabel, x + offset + 3, y + 4);
+            ctx.fillText(subLabel, x + offset + 3, y + 4);
         }
 
         // Draw Charge
         if (atom.charge !== 0) {
-            const chargeLabel = atom.charge > 0 ? '+' : '-'; // Simplified
-            const metrics = ctx.measureText(label);
-            const offset = metrics.width / 2 + 2;
+            const chargeLabel = atom.charge > 0 ? '+' : '-';
 
-            // Superscript
-            ctx.font = `${style.subscriptFontSize}px ${style.atomFont}`;
+            // Calculate offset based on whether we drew a subscript or just main text
+            ctx.font = `bold ${style.atomFontSize}px ${style.atomFont}`;
+            let offset = ctx.measureText(mainLabel).width / 2;
+            if (subLabel) {
+                ctx.font = `bold ${style.subscriptFontSize}px ${style.atomFont}`;
+                offset += ctx.measureText(subLabel).width + 2;
+            }
+
+            ctx.font = `bold ${style.subscriptFontSize}px ${style.atomFont}`;
+            ctx.strokeText(chargeLabel, x + offset + 4, y - 6);
             ctx.fillText(chargeLabel, x + offset + 4, y - 6);
         }
     }
