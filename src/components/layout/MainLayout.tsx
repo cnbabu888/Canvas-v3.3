@@ -1,7 +1,6 @@
 import React from 'react';
 import { TopHeader } from './TopHeader';
 import { PropertiesWidget } from '../widgets/PropertiesWidget';
-import { MolGrabberWidget } from '../widgets/MolGrabberWidget';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, RotateCw } from 'lucide-react';
 import { useState } from 'react';
@@ -72,7 +71,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                     {children}
 
                     <PropertiesWidget />
-                    <MolGrabberWidget />
 
                     <button
                         onClick={() => setIsRightPanelOpen(!isRightPanelOpen)}

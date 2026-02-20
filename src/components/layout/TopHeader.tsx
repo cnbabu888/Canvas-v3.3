@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { STYLES } from '../../styles/StyleManager';
 import { FileIO } from '../../utils/FileIO';
@@ -16,7 +16,8 @@ import {
     Bold, Italic, Eraser, FlaskConical,
     ZoomIn, ZoomOut, RotateCcw, Save,
     FileJson, Wand2, FileText,
-    Copy, FileImage
+    Copy, FileImage,
+    Search, Loader2, AlertCircle
 } from 'lucide-react';
 
 export const TopHeader: React.FC = () => {
@@ -24,6 +25,88 @@ export const TopHeader: React.FC = () => {
         molecule, zoom, offset, style,
         setMolecule, setZoom, setOffset, setCommandManager, executeCommand, setStyle
     } = useCanvasStore();
+
+    const [searchQuery, setSearchQuery] = useState('');
+    const [isSearching, setIsSearching] = useState(false);
+    const [searchError, setSearchError] = useState<string | null>(null);
+
+    const handleOmniSearch = async () => {
+        if (!searchQuery.trim()) return;
+        setIsSearching(true);
+        setSearchError(null);
+
+        try {
+            const searchRes = await fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(searchQuery)}/cids/JSON`);
+            const searchData = await searchRes.json();
+
+            if (!searchData.IdentifierList?.CID?.[0]) {
+                throw new Error('Compound not found');
+            }
+
+            const cid = searchData.IdentifierList.CID[0];
+            const recordRes = await fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/record/JSON?record_type=2d`);
+            const recordData = await recordRes.json();
+
+            if (!recordData.PC_Compounds?.[0]) {
+                throw new Error('No structure data found');
+            }
+
+            const compound = recordData.PC_Compounds[0];
+            const atoms = compound.atoms;
+            const bonds = compound.bonds;
+            const coords = compound.coords?.[0]?.conformers?.[0];
+
+            if (!atoms || !coords) throw new Error('Invalid structure data');
+
+            const newMol = new Molecule();
+            const idMap = new Map<number, string>();
+
+            const getSymbol = (z: number) => {
+                const map: Record<number, string> = { 1: 'H', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 15: 'P', 16: 'S', 17: 'Cl', 35: 'Br', 53: 'I' };
+                return map[z] || 'C';
+            };
+
+            atoms.aid.forEach((aid: number, index: number) => {
+                const z = atoms.element[index];
+                const x = coords.x[index] * 40;
+                const y = -coords.y[index] * 40;
+                const element = getSymbol(z);
+
+                const atomId = 'a_' + Math.random().toString(36).substr(2, 9);
+                const atom = new Atom(atomId, element, new Vec2D(x + 400, y + 300));
+                newMol.addAtom(atom);
+                idMap.set(aid, atom.id);
+            });
+
+            if (bonds) {
+                bonds.aid1.forEach((aid1: number, index: number) => {
+                    const aid2 = bonds.aid2[index];
+                    const order = bonds.order[index];
+
+                    const id1 = idMap.get(aid1);
+                    const id2 = idMap.get(aid2);
+
+                    if (id1 && id2) {
+                        let type: any = 'SINGLE';
+                        if (order === 2) type = 'DOUBLE';
+                        if (order === 3) type = 'TRIPLE';
+
+                        const bondId = 'b_' + Math.random().toString(36).substr(2, 9);
+                        const bond = new Bond(bondId, id1, id2, order, type);
+                        newMol.addBond(bond);
+                    }
+                });
+            }
+
+            setMolecule(newMol);
+            setSearchQuery('');
+        } catch (err: any) {
+            console.error('OmniSearch Error:', err);
+            setSearchError(err.message || 'Failed to fetch');
+        } finally {
+            setIsSearching(false);
+        }
+    };
 
     // -- File Handlers --
 
@@ -290,6 +373,63 @@ export const TopHeader: React.FC = () => {
                         color: 'blue'
                     });
                 }} />
+
+                {/* Omni-Search Bar (Gemini Style) */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    background: '#fff',
+                    borderRadius: '16px',
+                    border: searchError ? '1px solid #ef4444' : '1px solid #e0e0e0',
+                    padding: '2px 4px 2px 12px',
+                    marginLeft: 'auto',
+                    marginRight: '8px',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                    width: '260px',
+                    transition: 'border-color 200ms',
+                }}>
+                    <input
+                        style={{
+                            flex: 1,
+                            border: 'none',
+                            outline: 'none',
+                            fontSize: '12px',
+                            color: '#333',
+                            background: 'transparent',
+                        }}
+                        placeholder="Search Name or SMILES..."
+                        value={searchQuery}
+                        onChange={e => {
+                            setSearchQuery(e.target.value);
+                            setSearchError(null);
+                        }}
+                        onKeyDown={e => e.key === 'Enter' && handleOmniSearch()}
+                    />
+                    {searchError && (
+                        <div title={searchError} style={{ color: '#ef4444', marginRight: '6px', display: 'flex' }}>
+                            <AlertCircle size={14} />
+                        </div>
+                    )}
+                    <button
+                        style={{
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '12px',
+                            background: '#4f46e5',
+                            color: '#fff',
+                            border: 'none',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            opacity: searchQuery ? 1 : 0.6,
+                        }}
+                        onClick={handleOmniSearch}
+                        disabled={isSearching || !searchQuery}
+                    >
+                        {isSearching ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} strokeWidth={2.5} />}
+                    </button>
+                </div>
             </div>
         </div>
     );
