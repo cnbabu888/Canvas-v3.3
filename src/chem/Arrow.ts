@@ -9,7 +9,7 @@ export const ArrowType = {
 } as const;
 export type ArrowType = typeof ArrowType[keyof typeof ArrowType];
 
-export interface Arrow {
+export type Arrow = {
     id: string;
     type: ArrowType;
     start: Vec2D;
