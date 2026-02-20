@@ -2,6 +2,7 @@ import { Atom } from '../../molecular/Atom';
 import { Bond } from '../../molecular/Bond';
 import { ChemUtils } from '../../chem/ChemUtils';
 
+import { CPK_COLORS } from '../../styles/StyleManager';
 import type { CanvasStyle } from '../../styles/StyleManager';
 
 export class AtomRenderer {
@@ -38,9 +39,15 @@ export class AtomRenderer {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        ctx.fillStyle = style.color;
+        // Custom Coloring check
+        let atomColor = style.color;
+        if (style.colorByElement && atom.element !== 'C' && atom.element !== 'H') {
+            atomColor = CPK_COLORS[atom.element] || style.color;
+        }
+
+        ctx.fillStyle = atomColor;
         ctx.strokeStyle = style.backgroundColor;
-        ctx.lineWidth = 3; // Clear thick halo
+        ctx.lineWidth = style.marginWidth || 3; // Clear precise halo
 
         // Draw Main Label (element + H if any)
         ctx.strokeText(mainLabel, x, y);

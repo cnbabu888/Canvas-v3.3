@@ -18,6 +18,7 @@ export class BondRenderer {
         // Style Settings
         ctx.lineWidth = style.bondWidth;
         ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         ctx.strokeStyle = style.color;
         ctx.fillStyle = style.color;
 
