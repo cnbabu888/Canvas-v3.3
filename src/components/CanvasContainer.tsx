@@ -9,11 +9,13 @@ import { CommandDock } from './layout/CommandDock';
 import { TemplatesPanel } from './layout/TemplatesPanel';
 import { Bond, BondType } from '../molecular/Bond';
 import { Atom } from '../molecular/Atom';
+import { CommandManager } from '../commands/CommandManager';
+import { Arrow, ArrowType } from '../chem/Arrow';
 import { AddBondCommand } from '../commands/AddBondCommand';
 import { AddAtomCommand } from '../commands/AddAtomCommand';
 import { AddArrowCommand } from '../commands/AddArrowCommand';
-import type { Arrow } from '../chem/Arrow';
-import { ArrowType } from '../chem/Arrow';
+import { LayoutCommand } from '../commands/LayoutCommand';
+import { StructureOptimizer } from '../chem/StructureOptimizer';
 
 const BOND_TOOL_MAP: Record<string, BondType> = {
     'BOND_SINGLE': BondType.SINGLE,
@@ -47,6 +49,8 @@ export const CanvasContainer: React.FC = () => {
     const activeTool = useCanvasStore((state) => state.activeTool);
     const activeSubTool = useCanvasStore((state) => state.activeSubTool);
     const activeTemplate = useCanvasStore((state) => state.activeTemplate);
+    const selectedAtomIds = useCanvasStore((state) => state.selectedAtomIds);
+    const selectedBondIds = useCanvasStore((state) => state.selectedBondIds);
     const setSelected = useCanvasStore((state) => state.setSelected);
     // pageOrientation is used by store to update pageSize, but not needed here directly
     const pageSize = useCanvasStore((state) => state.pageSize);
@@ -99,14 +103,14 @@ export const CanvasContainer: React.FC = () => {
         // setOffset(new Vec2D(0, 0)); 
     }, [pageSize, zoom]);
 
-    // Update Engine Data
     useEffect(() => {
         if (engineRef.current) {
             engineRef.current.renderMolecule(molecule);
             engineRef.current.setStyle(style);
             engineRef.current.setLabWare(labware);
+            engineRef.current.setSelection(selectedAtomIds, selectedBondIds);
         }
-    }, [molecule, style, labware]);
+    }, [molecule, style, labware, selectedAtomIds, selectedBondIds]);
 
     useEffect(() => {
         if (engineRef.current) {
@@ -130,7 +134,7 @@ export const CanvasContainer: React.FC = () => {
     // Drag State
     const isDragging = useRef(false);
     const dragStartWorldPos = useRef<Vec2D | null>(null);
-    const dragItem = useRef<{ type: 'atom' | 'selection' | 'bond-create', ids: string[] } | null>(null);
+    const dragItem = useRef<{ type: 'atom' | 'selection' | 'selection-rubberband' | 'bond-create' | 'arrow-create', ids: string[], startPos?: Vec2D, toolId?: string } | null>(null);
     const dragStartPos = useRef<{ x: number, y: number } | null>(null);
 
     // Pan State
@@ -189,14 +193,46 @@ export const CanvasContainer: React.FC = () => {
                 }
 
                 if (hitAtomId) {
+                    let dragIds = [hitAtomId];
+                    // If atom is part of existing selection, we drag the whole selection
+                    if (selectedAtomIds.includes(hitAtomId)) {
+                        dragIds = [...selectedAtomIds];
+                    } else if (!e.ctrlKey && !e.metaKey) {
+                        // Select only this atom if clicking unselected without modifier
+                        useCanvasStore.getState().setSelected([hitAtomId], []);
+                    }
+
                     isDragging.current = true;
                     dragStartWorldPos.current = worldPos;
-                    dragItem.current = { type: 'atom', ids: [hitAtomId] };
+                    dragItem.current = { type: 'selection', ids: dragIds };
                     dragStartPos.current = { x: e.clientX, y: e.clientY };
 
                     window.addEventListener('mousemove', handleGlobalDragMove);
                     window.addEventListener('mouseup', handleGlobalDragUp);
                     return;
+                } else {
+                    // Check bonds for dragging entire selection if hit bond is selected
+                    const hitBond = engineRef.current.hitTestBond(worldPos);
+                    if (hitBond && selectedBondIds.includes(hitBond.id)) {
+                        isDragging.current = true;
+                        dragStartWorldPos.current = worldPos;
+                        dragItem.current = { type: 'selection', ids: [...selectedAtomIds] }; // Still drag atoms
+                        dragStartPos.current = { x: e.clientX, y: e.clientY };
+                        window.addEventListener('mousemove', handleGlobalDragMove);
+                        window.addEventListener('mouseup', handleGlobalDragUp);
+                        return;
+                    }
+
+                    // Otherwise, start rubber band
+                    if (!hitBond) {
+                        isDragging.current = true;
+                        dragStartWorldPos.current = worldPos;
+                        dragItem.current = { type: 'selection-rubberband', ids: [] };
+                        dragStartPos.current = { x: e.clientX, y: e.clientY };
+                        window.addEventListener('mousemove', handleGlobalDragMove);
+                        window.addEventListener('mouseup', handleGlobalDragUp);
+                        return;
+                    }
                 }
             }
 
@@ -303,7 +339,7 @@ export const CanvasContainer: React.FC = () => {
             // Actually, sticking to movementX is safer for persistent dragging
             const worldDelta = new Vec2D(e.movementX / t.a, e.movementY / t.d);
 
-            if (dragItem.current.type === 'atom') {
+            if (dragItem.current.type === 'selection') {
                 dragItem.current.ids.forEach(id => {
                     const atom = molecule.atoms.get(id);
                     if (atom) {
@@ -311,7 +347,16 @@ export const CanvasContainer: React.FC = () => {
                     }
                 });
                 engineRef.current.renderMolecule(molecule);
-            } else if ((dragItem.current as any).type === 'arrow-create') {
+            } else if (dragItem.current.type === 'selection-rubberband') {
+                const page = document.querySelector('.document-page');
+                if (page) {
+                    const rect = page.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    const currentWorldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
+                    engineRef.current.setRubberBand(dragStartWorldPos.current, currentWorldPos);
+                }
+            } else if (dragItem.current.type === 'arrow-create') {
                 // Temp Arrow
                 const data = dragItem.current as any;
                 const startPos = data.startPos as Vec2D; // World Pos stored?
@@ -372,7 +417,7 @@ export const CanvasContainer: React.FC = () => {
     const handleGlobalDragUp = (e: MouseEvent) => {
         if (isDragging.current && dragItem.current && dragStartWorldPos.current && engineRef.current) {
 
-            if (dragItem.current.type === 'atom') {
+            if (dragItem.current.type === 'selection') {
                 const page = document.querySelector('.document-page');
                 if (page) {
                     const rect = page.getBoundingClientRect();
@@ -382,6 +427,7 @@ export const CanvasContainer: React.FC = () => {
                     const totalDelta = currentWorldPos.sub(dragStartWorldPos.current);
 
                     if (totalDelta.length() > 0.1) {
+                        // Revert the naive additive moves done during drag to cleanly apply one final Command
                         dragItem.current.ids.forEach(id => {
                             const atom = molecule.atoms.get(id);
                             if (atom) {
@@ -391,9 +437,45 @@ export const CanvasContainer: React.FC = () => {
 
                         const cmd = new MoveElementsCommand(molecule, dragItem.current.ids, totalDelta);
                         useCanvasStore.getState().executeCommand(cmd);
-                        // Allow React to update state
-                        useCanvasStore.getState().setMolecule(molecule);
                     }
+                }
+            } else if (dragItem.current.type === 'selection-rubberband') {
+                engineRef.current.setRubberBand(null, null);
+                const page = document.querySelector('.document-page');
+                if (page && dragStartWorldPos.current) {
+                    const rect = page.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    const currentWorldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
+
+                    const minX = Math.min(dragStartWorldPos.current.x, currentWorldPos.x);
+                    const maxX = Math.max(dragStartWorldPos.current.x, currentWorldPos.x);
+                    const minY = Math.min(dragStartWorldPos.current.y, currentWorldPos.y);
+                    const maxY = Math.max(dragStartWorldPos.current.y, currentWorldPos.y);
+
+                    const newSelectedAtoms: string[] = [];
+                    const newSelectedBonds: string[] = [];
+
+                    molecule.atoms.forEach((atom: Atom) => {
+                        if (atom.pos.x >= minX && atom.pos.x <= maxX && atom.pos.y >= minY && atom.pos.y <= maxY) {
+                            newSelectedAtoms.push(atom.id);
+                        }
+                    });
+
+                    molecule.bonds.forEach((bond: Bond) => {
+                        const atomA = molecule.atoms.get(bond.atomA);
+                        const atomB = molecule.atoms.get(bond.atomB);
+                        if (atomA && atomB) {
+                            const midX = (atomA.pos.x + atomB.pos.x) / 2;
+                            const midY = (atomA.pos.y + atomB.pos.y) / 2;
+                            if (midX >= minX && midX <= maxX && midY >= minY && midY <= maxY) {
+                                newSelectedBonds.push(bond.id);
+                            }
+                        }
+                    });
+
+                    // Additive if shift/ctrl is held when rubber banding? Standard says replace unless held. We'll replace for generic rubberband.
+                    useCanvasStore.getState().setSelected(newSelectedAtoms, newSelectedBonds);
                 }
             } else if (dragItem.current.type === 'bond-create') {
                 engineRef.current.clearTempBond();
@@ -434,7 +516,7 @@ export const CanvasContainer: React.FC = () => {
                     }
                     useCanvasStore.getState().setMolecule(molecule);
                 }
-            } else if ((dragItem.current as any).type === 'arrow-create') {
+            } else if (dragItem.current.type === 'arrow-create') {
                 engineRef.current.clearTempArrow();
                 const data = dragItem.current as any;
                 const startPos = data.startPos as Vec2D;
@@ -495,7 +577,7 @@ export const CanvasContainer: React.FC = () => {
                     if (pageRect) {
                         const x = e.clientX - pageRect.left;
                         const y = e.clientY - pageRect.top;
-                        engineRef.current.handleClick(new Vec2D(x, y));
+                        engineRef.current.handleClick(new Vec2D(x, y), e.detail, e.ctrlKey || e.metaKey);
                     }
                 }
             }
@@ -517,6 +599,34 @@ export const CanvasContainer: React.FC = () => {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+            const store = useCanvasStore.getState();
+
+            // Core selection hotkeys
+            if (e.key === 'Escape') {
+                store.clearSelection();
+            } else if (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'v') {
+                // If not typing in input, switch to select tool
+                store.setActiveTool('select');
+            } else if (e.key.toLowerCase() === 'k' && e.ctrlKey && e.shiftKey) {
+                e.preventDefault();
+                const { molecule, style, executeCommand, setMolecule } = store;
+                if (molecule && molecule.atoms.size > 0) {
+                    const command = new LayoutCommand(molecule);
+                    StructureOptimizer.cleanLayout(molecule, style.bondLength);
+                    const newMap = new Map<string, Vec2D>();
+                    molecule.atoms.forEach(a => newMap.set(a.id, new Vec2D(a.pos.x, a.pos.y)));
+                    command.setNewPositions(newMap);
+                    executeCommand(command);
+
+                    // Force re-render properly by immutability hack
+                    const newMol = new Molecule();
+                    newMol.atoms = molecule.atoms;
+                    newMol.bonds = molecule.bonds;
+                    newMol.adjacency = molecule.adjacency;
+                    setMolecule(newMol);
+                }
+            }
+
             if (engineRef.current) {
                 engineRef.current.handleKeyDown(e);
             }

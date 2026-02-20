@@ -192,20 +192,54 @@ export const TopHeader: React.FC = () => {
     const handleClean = () => {
         if (!molecule || !molecule.atoms) return;
 
+        const targetPositions = StructureOptimizer.cleanLayout(molecule, style.bondLength);
+        if (!targetPositions) return;
+
         const command = new LayoutCommand(molecule);
-        StructureOptimizer.cleanLayout(molecule, 100);
+        command.setNewPositions(targetPositions);
 
-        const newMap = new Map<string, Vec2D>();
-        molecule.atoms.forEach(a => newMap.set(a.id, new Vec2D(a.pos.x, a.pos.y)));
-        command.setNewPositions(newMap);
+        // Animation state
+        const duration = 300; // 300ms smooth transition
+        const startTime = performance.now();
+        const initialPositions = new Map<string, Vec2D>();
 
-        executeCommand(command);
+        molecule.atoms.forEach((atom, id) => {
+            initialPositions.set(id, atom.pos.clone());
+        });
 
-        const newMol = new Molecule();
-        newMol.atoms = molecule.atoms;
-        newMol.bonds = molecule.bonds;
-        newMol.adjacency = molecule.adjacency;
-        setMolecule(newMol);
+        const animate = (time: number) => {
+            let progress = (time - startTime) / duration;
+            if (progress > 1) progress = 1;
+
+            // Ease out cubic
+            const ease = 1 - Math.pow(1 - progress, 3);
+
+            const interpolatedMol = new Molecule();
+            interpolatedMol.bonds = molecule.bonds;
+            interpolatedMol.adjacency = molecule.adjacency;
+
+            molecule.atoms.forEach((atom, id) => {
+                const startPos = initialPositions.get(id)!;
+                const targetPos = targetPositions.get(id) || startPos;
+
+                const newX = startPos.x + (targetPos.x - startPos.x) * ease;
+                const newY = startPos.y + (targetPos.y - startPos.y) * ease;
+
+                const clonedAtom = new Atom(atom.id, atom.element, new Vec2D(newX, newY));
+                clonedAtom.charge = atom.charge;
+                interpolatedMol.atoms.set(id, clonedAtom);
+            });
+
+            setMolecule(interpolatedMol);
+
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                executeCommand(command);
+            }
+        };
+
+        requestAnimationFrame(animate);
     };
 
     const handleStyleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {

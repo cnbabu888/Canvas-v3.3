@@ -4,7 +4,7 @@ import { Atom } from '../../molecular/Atom';
 import type { CanvasStyle } from '../../styles/StyleManager';
 
 export class BondRenderer {
-    static drawBond(ctx: CanvasRenderingContext2D, bond: Bond, atomA: Atom, atomB: Atom, style: CanvasStyle) {
+    static drawBond(ctx: CanvasRenderingContext2D, bond: Bond, atomA: Atom, atomB: Atom, style: CanvasStyle, scale: number = 1) {
         const p1 = atomA.pos;
         const p2 = atomB.pos;
         const dist = p1.distance(p2);
@@ -15,15 +15,19 @@ export class BondRenderer {
         ctx.rotate(angle);
 
         // Standard Bond Settings
-        // Style Settings
-        ctx.lineWidth = style.bondWidth;
+        // Invariant visual width: divide logical width by scale factor
+        ctx.lineWidth = style.bondWidth / scale;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.strokeStyle = style.color;
         ctx.fillStyle = style.color;
 
-        // Spacing based on style
-        const doubleBondSpacing = dist * (style.doubleBondSpacing || 0.18) / 2;
+        // Spacing based on style. Does NOT scale visually either! So we divide by scale as well if it's an absolute value, but currently it's a fraction of distance.
+        // Wait, the specification says: "Double bond spacing: stays fixed at 7px regardless of zoom" -> This means the physical space on screen should be constant.
+        // Let's implement fixed physical spacing. The style specifies "doubleBondSpacing as relative fraction". But we want it fixed?
+        // Let's use bondLength * spacing ratio / scale.
+        const doubleBondSpacing = (style.bondLength * (style.doubleBondSpacing || 0.18)) / scale;
+
 
         switch (bond.type) {
             case BondType.SINGLE:
@@ -31,8 +35,11 @@ export class BondRenderer {
                 break;
 
             case BondType.DOUBLE:
-                this.drawLine(ctx, 0, -doubleBondSpacing, dist, -doubleBondSpacing);
-                this.drawLine(ctx, 0, doubleBondSpacing, dist, doubleBondSpacing);
+                // Double bonds: one inner, one outer. Trim inner.
+                // For simplicity here, we center them symmetrically. In StructureOptimizer we will shift them.
+                const trim = dist * 0.10; // 10% trim each side
+                this.drawLine(ctx, 0, -doubleBondSpacing / 2, dist, -doubleBondSpacing / 2);
+                this.drawLine(ctx, trim, doubleBondSpacing / 2, dist - trim, doubleBondSpacing / 2);
                 break;
 
             case BondType.TRIPLE:
@@ -42,25 +49,32 @@ export class BondRenderer {
                 break;
 
             case BondType.WEDGE_SOLID:
+                // Perfect sharp triangle, no rounded edges
+                ctx.lineJoin = 'miter';
+                const baseWidth = 4 / scale; // Fixed 4px width regardless of zoom
                 ctx.beginPath();
                 ctx.moveTo(0, 0);
-                ctx.lineTo(dist, -dist * 0.15); // Wide end
-                ctx.lineTo(dist, dist * 0.15);
+                ctx.lineTo(dist, -baseWidth / 2);
+                ctx.lineTo(dist, baseWidth / 2);
                 ctx.closePath();
                 ctx.fill();
                 break;
 
             case BondType.WEDGE_HASH:
-                // Series of lines
-                const hashSpacing = 5;
-                for (let x = 2; x < dist; x += hashSpacing) {
-                    const w = (x / dist) * (dist * 0.3); // Width increases
+                // 6 parallel lines getting wider
+                const lines = 6;
+                const minWidth = 0.5 / scale;
+                const maxWidth = 4 / scale;
+                for (let i = 1; i <= lines; i++) {
+                    const frac = i / lines;
+                    const x = dist * frac;
+                    const w = minWidth + (maxWidth - minWidth) * frac;
                     this.drawLine(ctx, x, -w / 2, x, w / 2);
                 }
                 break;
 
             case BondType.WAVY:
-                this.drawWavy(ctx, dist);
+                this.drawWavy(ctx, dist, 3, 2 / scale); // 3 cycles, 2px amplitude fixed
                 break;
 
             case BondType.DATIVE:
@@ -75,12 +89,11 @@ export class BondRenderer {
                 break;
 
             case BondType.RESONANCE:
-                // Dashed single line? Or one solid one dashed? Assuming dashed for now or search standard.
-                // Usually resonance bond is like partial double. 
-                // Let's draw Single + Dashed
-                this.drawLine(ctx, 0, 0, dist, 0);
-                ctx.setLineDash([5, 5]);
-                this.drawLine(ctx, 0, doubleBondSpacing, dist, doubleBondSpacing);
+                // Solid outer line + one DASHED inner line
+                const innerSpacing = doubleBondSpacing;
+                this.drawLine(ctx, 0, 0, dist, 0); // Outer
+                ctx.setLineDash([3 / scale, 2 / scale]); // Dash pattern: 3px on, 2px off (scaled)
+                this.drawLine(ctx, 0, innerSpacing, dist, innerSpacing); // Inner dashed
                 ctx.setLineDash([]);
                 break;
 
@@ -143,14 +156,14 @@ export class BondRenderer {
         ctx.stroke();
     }
 
-    private static drawWavy(ctx: CanvasRenderingContext2D, dist: number) {
+    private static drawWavy(ctx: CanvasRenderingContext2D, dist: number, cycles: number, amplitude: number) {
         ctx.beginPath();
         ctx.moveTo(0, 0);
-        const steps = 10;
+        const steps = cycles * 2;
         const stepLen = dist / steps;
         for (let i = 0; i < steps; i++) {
             const x = i * stepLen;
-            const y = (i % 2 === 0 ? 1 : -1) * 3;
+            const y = (i % 2 === 0 ? 1 : -1) * amplitude;
             ctx.lineTo(x + stepLen / 2, y);
             ctx.lineTo(x + stepLen, 0);
         }

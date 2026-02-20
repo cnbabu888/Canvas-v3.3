@@ -1,76 +1,94 @@
-
 import { Molecule } from '../molecular/Molecule';
 import { Vec2D } from '../math/Vec2D';
 
 export class StructureOptimizer {
+    /**
+     * Attempts to normalize the 2D layout of a molecule by snapping bond lengths
+     * to the targetLength and quantizing angles to standard chemical increments (30°, 60°, 90°, 120°).
+     * Maintains relative topology by performing a BFS from a central atom.
+     */
+    static cleanLayout(molecule: Molecule, targetLength: number) {
+        if (molecule.atoms.size === 0) return;
 
-    static cleanLayout(molecule: Molecule, iterations: number = 50) {
-        if (molecule.atoms.size < 2) return;
+        // 1. Find the starting atom (most connected, or just first)
+        let rootNodeId = Array.from(molecule.atoms.keys())[0];
+        let maxBonds = 0;
 
-        // Simple Force-Directed Graph 
-        // 1. Repulsion between all atoms
-        // 2. Attraction (Springs) between bonded atoms
+        const adjacency = new Map<string, string[]>();
+        molecule.atoms.forEach((_, id) => adjacency.set(id, []));
 
-        const atoms = Array.from(molecule.atoms.values());
-        const k_repulse = 10000;
-        const k_spring = 0.5;
-        const targetLen = 40; // Ideal bond length
+        molecule.bonds.forEach((bond) => {
+            adjacency.get(bond.atomA)?.push(bond.atomB);
+            adjacency.get(bond.atomB)?.push(bond.atomA);
+        });
 
-        const dt = 0.5;
-
-        // Temp storage for forces
-        const forces = new Map<string, Vec2D>();
-
-        for (let iter = 0; iter < iterations; iter++) {
-            // Reset forces
-            atoms.forEach(a => forces.set(a.id, new Vec2D(0, 0)));
-
-            // 1. Repulsion ( Coulomb-like )
-            for (let i = 0; i < atoms.length; i++) {
-                for (let j = i + 1; j < atoms.length; j++) {
-                    const a = atoms[i];
-                    const b = atoms[j];
-                    const diff = a.pos.sub(b.pos);
-                    let dist = diff.mag();
-                    if (dist < 1) dist = 1; // Avoid singularity
-
-                    const f = diff.normalize().scale(k_repulse / (dist * dist));
-
-                    forces.set(a.id, forces.get(a.id)!.add(f));
-                    forces.set(b.id, forces.get(b.id)!.sub(f));
-                }
+        adjacency.forEach((neighbors, id) => {
+            if (neighbors.length > maxBonds) {
+                maxBonds = neighbors.length;
+                rootNodeId = id;
             }
+        });
 
-            // 2. Spring Forces ( Hooke's Law )
-            molecule.bonds.forEach(bond => {
-                const a = molecule.atoms.get(bond.atomA);
-                const b = molecule.atoms.get(bond.atomB);
-                if (a && b) {
-                    const diff = b.pos.sub(a.pos);
-                    const dist = diff.mag();
-                    const displacement = dist - targetLen;
+        // 2. BFS Traversal & Placement
+        const newPositions = new Map<string, Vec2D>();
+        const visited = new Set<string>();
+        const queue: string[] = [];
 
-                    const f = diff.normalize().scale(k_spring * displacement);
+        // Center on screen root initially
+        const rootAtom = molecule.atoms.get(rootNodeId)!;
+        newPositions.set(rootNodeId, rootAtom.pos.clone());
+        visited.add(rootNodeId);
+        queue.push(rootNodeId);
 
-                    forces.set(a.id, forces.get(a.id)!.add(f));
-                    forces.set(b.id, forces.get(b.id)!.sub(f));
-                }
-            });
+        while (queue.length > 0) {
+            const currId = queue.shift()!;
+            const currPos = newPositions.get(currId)!;
+            const neighbors = adjacency.get(currId) || [];
 
-            // 3. Angular Constraints (Optional/Advanced - skipping for simple cleanup)
-            // Just Repulsion + Spring usually gives decent minimal energy layout (spread out).
+            let unvisitedNeighbors = neighbors.filter(id => !visited.has(id));
+            if (unvisitedNeighbors.length === 0) continue;
 
-            // 4. Apply Forces
-            atoms.forEach(a => {
-                const f = forces.get(a.id)!;
-                // Limit force
-                if (f.mag() > 50) f.scale(50 / f.mag());
+            const baseAtom = molecule.atoms.get(currId)!;
 
-                a.pos = a.pos.add(f.scale(dt));
+            unvisitedNeighbors.forEach((neighborId) => {
+                const neighborAtom = molecule.atoms.get(neighborId)!;
+
+                // Calculate current angle
+                const dx = neighborAtom.pos.x - baseAtom.pos.x;
+                const dy = neighborAtom.pos.y - baseAtom.pos.y;
+                let currentAngle = Math.atan2(dy, dx);
+
+                // Snap angle to nearest 30 degrees (Math.PI / 6)
+                const snapIncrement = Math.PI / 6;
+                let snappedAngle = Math.round(currentAngle / snapIncrement) * snapIncrement;
+
+                // Position at exact target length
+                const nx = currPos.x + Math.cos(snappedAngle) * targetLength;
+                const ny = currPos.y + Math.sin(snappedAngle) * targetLength;
+
+                newPositions.set(neighborId, new Vec2D(nx, ny));
+                visited.add(neighborId);
+                queue.push(neighborId);
             });
         }
 
-        // Re-center logic?
-        // Optional: keep centroid stable or just let it float.
+        // 3. Center whole structure
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        newPositions.forEach(pos => {
+            if (pos.x < minX) minX = pos.x;
+            if (pos.x > maxX) maxX = pos.x;
+            if (pos.y < minY) minY = pos.y;
+            if (pos.y > maxY) maxY = pos.y;
+        });
+
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+
+        const centeredPositions = new Map<string, Vec2D>();
+        newPositions.forEach((pos, id) => {
+            centeredPositions.set(id, new Vec2D(pos.x - cx, pos.y - cy));
+        });
+
+        return centeredPositions;
     }
 }

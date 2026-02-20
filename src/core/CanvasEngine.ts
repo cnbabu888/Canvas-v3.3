@@ -59,6 +59,11 @@ export class CanvasEngine {
     private molecule: any = null;
     private labware: LabWare[] = [];
 
+    // Selection State
+    private selectedAtomIds: Set<string> = new Set();
+    private selectedBondIds: Set<string> = new Set();
+    private rubberBandRect: { start: Vec2D, end: Vec2D } | null = null;
+
     // Interaction State
     private activeTool: string = 'select';
     private activeTemplate: any | null = null; // Template
@@ -203,6 +208,21 @@ export class CanvasEngine {
         this.invalidate();
     }
 
+    public setSelection(atomIds: string[], bondIds: string[]) {
+        this.selectedAtomIds = new Set(atomIds);
+        this.selectedBondIds = new Set(bondIds);
+        this.invalidate();
+    }
+
+    public setRubberBand(start: Vec2D | null, end: Vec2D | null) {
+        if (start && end) {
+            this.rubberBandRect = { start, end };
+        } else {
+            this.rubberBandRect = null;
+        }
+        this.invalidate();
+    }
+
 
     private render() {
         if (!this.dirtyRect) return;
@@ -246,6 +266,12 @@ export class CanvasEngine {
                     this.drawStereoLabels(ctx, stereoLabels);
                 }
             }
+            if (layerId === 'layer-2-selection') {
+                this.drawSelection(ctx);
+                if (this.rubberBandRect) {
+                    this.drawRubberBand(ctx);
+                }
+            }
             if (layerId === 'layer-3-interaction') {
                 this.drawPreview(ctx);
             }
@@ -254,6 +280,62 @@ export class CanvasEngine {
         });
 
         this.dirtyRect = null;
+    }
+
+    private drawSelection(ctx: CanvasRenderingContext2D) {
+        if (!this.molecule) return;
+
+        ctx.strokeStyle = '#2E86C1';
+
+        // Draw Atom Selections
+        ctx.lineWidth = 2;
+        this.selectedAtomIds.forEach(id => {
+            const atom = this.molecule.atoms.get(id);
+            if (atom) {
+                ctx.beginPath();
+                ctx.arc(atom.pos.x, atom.pos.y, 12, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        });
+
+        // Draw Bond Selections
+        this.selectedBondIds.forEach(id => {
+            const bond = this.molecule.bonds.get(id);
+            if (bond) {
+                const atomA = this.molecule.atoms.get(bond.atomA);
+                const atomB = this.molecule.atoms.get(bond.atomB);
+                if (atomA && atomB) {
+                    ctx.beginPath();
+                    // Draw exactly over the bond line, thicker
+                    ctx.lineWidth = this.style.bondWidth + 4;
+                    ctx.lineCap = 'round';
+                    ctx.moveTo(atomA.pos.x, atomA.pos.y);
+                    ctx.lineTo(atomB.pos.x, atomB.pos.y);
+                    ctx.stroke();
+                }
+            }
+        });
+    }
+
+    private drawRubberBand(ctx: CanvasRenderingContext2D) {
+        if (!this.rubberBandRect) return;
+        const { start, end } = this.rubberBandRect;
+
+        const x = Math.min(start.x, end.x);
+        const y = Math.min(start.y, end.y);
+        const w = Math.abs(start.x - end.x);
+        const h = Math.abs(start.y - end.y);
+
+        ctx.strokeStyle = '#2E86C1';
+        ctx.lineWidth = 1 / this.transform.a; // Keeps line thin despite zoom
+        ctx.setLineDash([4 / this.transform.a, 4 / this.transform.a]);
+        ctx.fillStyle = 'rgba(46, 134, 193, 0.1)';
+
+        ctx.beginPath();
+        ctx.rect(x, y, w, h);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
     }
 
     private drawStereoLabels(ctx: CanvasRenderingContext2D, labels: Map<string, StereoLabel>) {
@@ -438,13 +520,14 @@ export class CanvasEngine {
         }
     }
     private drawMolecule(ctx: CanvasRenderingContext2D, molecule: any) {
+        const scale = this.transform.a;
         // Draw Bonds
         if (molecule.bonds) {
             molecule.bonds.forEach((bond: any) => {
                 const atomA = molecule.atoms.get(bond.atomA);
                 const atomB = molecule.atoms.get(bond.atomB);
                 if (atomA && atomB) {
-                    BondRenderer.drawBond(ctx, bond, atomA, atomB, this.style);
+                    BondRenderer.drawBond(ctx, bond, atomA, atomB, this.style, scale);
                 }
             });
         }
@@ -459,7 +542,7 @@ export class CanvasEngine {
                         if (b.atomA === atom.id || b.atomB === atom.id) connectedBonds.push(b);
                     });
                 }
-                AtomRenderer.drawAtom(ctx, atom, connectedBonds, this.style);
+                AtomRenderer.drawAtom(ctx, atom, connectedBonds, this.style, scale, molecule.atoms);
             });
         }
     }
@@ -547,7 +630,7 @@ export class CanvasEngine {
 
 
 
-    public handleClick(screenPoint: Vec2D) {
+    public handleClick(screenPoint: Vec2D, clickCount: number = 1, isAdditive: boolean = false) {
         if (!this.molecule) return;
 
         // Handle Template Tool
@@ -738,25 +821,54 @@ export class CanvasEngine {
 
         // Handle Selection
         if (this.activeTool === 'select') {
-            let selectedAtoms: string[] = [];
-            let selectedBonds: string[] = [];
+            let selectedAtoms: string[] = isAdditive ? Array.from(this.selectedAtomIds) : [];
+            let selectedBonds: string[] = isAdditive ? Array.from(this.selectedBondIds) : [];
 
             // Check Atoms first (priority)
-            let found = false;
+            let hitAtomId: string | null = null;
             for (const atom of this.molecule.atoms.values()) {
                 if (atom.pos.distance(worldPoint) < 10) {
-                    selectedAtoms.push(atom.id);
-                    found = true;
+                    hitAtomId = atom.id;
                     break;
                 }
             }
 
-            // If not atom, check bonds
-            if (!found) {
+            let hitBondId: string | null = null;
+            if (!hitAtomId) {
                 const bond = this.hitTestBond(worldPoint);
                 if (bond) {
-                    selectedBonds.push(bond.id);
+                    hitBondId = bond.id;
                 }
+            }
+
+            if (clickCount === 2 && (hitAtomId || hitBondId)) {
+                // Double Click: Select entire connected component
+                const connected = this.getConnectedComponent(hitAtomId, hitBondId);
+                // Additive Double Click? Usually double click replaces. We'll respect isAdditive for power users.
+                if (!isAdditive) {
+                    selectedAtoms = [];
+                    selectedBonds = [];
+                }
+                connected.atoms.forEach(id => { if (!selectedAtoms.includes(id)) selectedAtoms.push(id) });
+                connected.bonds.forEach(id => { if (!selectedBonds.includes(id)) selectedBonds.push(id) });
+            } else if (hitAtomId) {
+                // Single Click Atom
+                if (isAdditive && selectedAtoms.includes(hitAtomId)) {
+                    selectedAtoms = selectedAtoms.filter(id => id !== hitAtomId); // Toggle off if already selected
+                } else {
+                    if (!selectedAtoms.includes(hitAtomId)) selectedAtoms.push(hitAtomId);
+                }
+            } else if (hitBondId) {
+                // Single Click Bond
+                if (isAdditive && selectedBonds.includes(hitBondId)) {
+                    selectedBonds = selectedBonds.filter(id => id !== hitBondId);
+                } else {
+                    if (!selectedBonds.includes(hitBondId)) selectedBonds.push(hitBondId);
+                }
+            } else if (!isAdditive) {
+                // Click empty space without Ctrl -> Clear
+                selectedAtoms = [];
+                selectedBonds = [];
             }
 
             if (this.onSelect) {
@@ -794,7 +906,7 @@ export class CanvasEngine {
         */
     }
 
-    private hitTestBond(point: Vec2D): Bond | null {
+    public hitTestBond(point: Vec2D): Bond | null {
         if (!this.molecule || !this.molecule.bonds) return null;
 
         const threshold = 5 / this.transform.a;
@@ -828,7 +940,46 @@ export class CanvasEngine {
         return p.distance(projection);
     }
 
-    // private cycleBondType(bond: Bond) { ... } // Removed as per Phase 4 strict selection vs cycle
+    // Helper: Traverse graph to find all connected atoms/bonds
+    private getConnectedComponent(startAtomId: string | null, startBondId: string | null): { atoms: string[], bonds: string[] } {
+        const visitedAtoms = new Set<string>();
+        const visitedBonds = new Set<string>();
+        const queue: string[] = [];
+
+        if (startAtomId) {
+            queue.push(startAtomId);
+        } else if (startBondId) {
+            const bond = this.molecule.bonds.get(startBondId);
+            if (bond) {
+                visitedBonds.add(startBondId);
+                queue.push(bond.atomA);
+                queue.push(bond.atomB);
+            }
+        }
+
+        while (queue.length > 0) {
+            const currentId = queue.shift()!;
+            if (visitedAtoms.has(currentId)) continue;
+
+            visitedAtoms.add(currentId);
+
+            // Find all connected bonds
+            if (this.molecule.bonds) {
+                this.molecule.bonds.forEach((bond: any) => {
+                    if (bond.atomA === currentId || bond.atomB === currentId) {
+                        visitedBonds.add(bond.id);
+                        const neighborId = bond.atomA === currentId ? bond.atomB : bond.atomA;
+                        if (!visitedAtoms.has(neighborId)) {
+                            queue.push(neighborId);
+                        }
+                    }
+                });
+            }
+        }
+
+        return { atoms: Array.from(visitedAtoms), bonds: Array.from(visitedBonds) };
+    }
+
     public handleKeyDown(e: KeyboardEvent) {
         if (!this.hoverItem) return;
 
