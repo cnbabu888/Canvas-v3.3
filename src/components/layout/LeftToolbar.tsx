@@ -19,7 +19,8 @@ import {
     Beaker,
     TestTube,
     FlaskRound,
-    Link2
+    Link2,
+    Scissors
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { ToolGroup } from './ToolGroup';
@@ -47,8 +48,10 @@ const TOOLS = [
             { id: 'select-marquee', icon: ScanLine, label: 'Marquee Select' },
         ]
     },
-    // 2. Eraser (X)
-    { id: 'erase', icon: Eraser, label: 'Eraser (X)', shortcut: 'X' },
+    // 2. Eraser (E)
+    { id: 'erase', icon: Eraser, label: 'Eraser (E)', shortcut: 'E' },
+    // 3. Scissor (X)
+    { id: 'scissor', icon: Scissors, label: 'Scissor (X)', shortcut: 'X' },
     // 3. Text (T)
     { id: 'text', icon: Type, label: 'Text (T)', shortcut: 'T' },
     // 4. Bond (B)
@@ -149,8 +152,8 @@ const TOOLS = [
     { id: 'pan', icon: Hand, label: 'Pan Canvas' },
 ];
 
-// Separator indices: after index 3 (Text), 8 (Arrows), 12 (Table)
-const SEPARATOR_BEFORE = new Set([3, 8, 12]);
+// Separator indices: after index 3 (Scissor), 9 (Arrows), 13 (Table)
+const SEPARATOR_BEFORE = new Set([4, 9, 13]);
 
 export const LeftToolbar: React.FC = () => {
     const activeTool = useCanvasStore((state) => state.activeTool);

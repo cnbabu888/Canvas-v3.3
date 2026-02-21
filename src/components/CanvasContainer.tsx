@@ -5,6 +5,7 @@ import { useCanvasStore } from '../store/useCanvasStore';
 import { Vec2D } from '../math/Vec2D';
 import { Matrix2D } from '../math/Matrix2D';
 import { MoveElementsCommand } from '../commands/MoveElementsCommand';
+import { RemoveElementsCommand } from '../commands/RemoveElementsCommand';
 import { TemplatesPanel } from './layout/TemplatesPanel';
 import { Bond, BondType } from '../molecular/Bond';
 import { Atom } from '../molecular/Atom';
@@ -25,7 +26,8 @@ const BOND_TOOL_MAP: Record<string, BondType> = {
     'BOND_WEDGE_HASH': BondType.WEDGE_HASH,
     'BOND_DATIVE': BondType.DATIVE,
     'BOND_WAVY': BondType.WAVY,
-    'BOND_AROMATIC': BondType.RESONANCE
+    'BOND_AROMATIC': BondType.RESONANCE,
+    'bond': BondType.SINGLE, // Parent group fallback
 };
 
 const LAYERS = [
@@ -236,6 +238,46 @@ export const CanvasContainer: React.FC = () => {
                 }
             }
 
+            // Eraser Tool Drag
+            if (activeTool === 'erase') {
+                // Don't set isDragging yet — let handleMouseUp detect click vs drag.
+                // Store the erase data but only commit to drag on handleGlobalDragMove.
+                dragItem.current = {
+                    type: 'erase-path' as any,
+                    ids: [],
+                    path: [worldPos],
+                    erasedAtoms: new Set<string>(),
+                    erasedBonds: new Set<string>(),
+                    tempCommands: []
+                };
+                dragStartPos.current = { x: e.clientX, y: e.clientY };
+                dragStartWorldPos.current = worldPos;
+
+                // Initialize engine temp path
+                engineRef.current.setTempEraserPath([worldPos]);
+
+                window.addEventListener('mousemove', handleGlobalDragMove);
+                window.addEventListener('mouseup', handleGlobalDragUp);
+                return;
+            }
+
+            // Scissor Tool Drag
+            if (activeTool === 'scissor') {
+                // Don't set isDragging yet — let handleMouseUp detect click vs drag.
+                dragItem.current = {
+                    type: 'scissor-path' as any,
+                    ids: [],
+                    path: [worldPos]
+                };
+                dragStartPos.current = { x: e.clientX, y: e.clientY };
+                dragStartWorldPos.current = worldPos;
+                engineRef.current.setTempEraserPath([worldPos]);
+
+                window.addEventListener('mousemove', handleGlobalDragMove);
+                window.addEventListener('mouseup', handleGlobalDragUp);
+                return;
+            }
+
             // Check Bond Tool for Creation Drag
             const currentTool = activeSubTool || activeTool;
             if (currentTool && BOND_TOOL_MAP[currentTool]) {
@@ -332,6 +374,14 @@ export const CanvasContainer: React.FC = () => {
             engineRef.current.updateMousePosition(new Vec2D(x, y));
         }
 
+        // Promote to drag if mouse moved enough (for eraser/scissor that don't set isDragging immediately)
+        if (!isDragging.current && dragItem.current && dragStartPos.current) {
+            const dist = Math.hypot(e.clientX - dragStartPos.current.x, e.clientY - dragStartPos.current.y);
+            if (dist > 5) {
+                isDragging.current = true;
+            }
+        }
+
         if (isDragging.current && dragItem.current && dragStartWorldPos.current) {
             const t = engineRef.current.getTransform();
             // Current delta in world units
@@ -408,6 +458,87 @@ export const CanvasContainer: React.FC = () => {
                         const y = e.clientY - rect.top;
                         const worldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
                         engineRef.current.setTempBond(startAtom.pos, worldPos, type);
+                    }
+                }
+            } else if (dragItem.current.type === 'erase-path') {
+                const page = document.querySelector('.document-page');
+                if (page) {
+                    const rect = page.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    const worldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
+
+                    const dragData = dragItem.current as any;
+                    const path = dragData.path as Vec2D[];
+                    const erasedAtoms = dragData.erasedAtoms as Set<string>;
+                    const erasedBonds = dragData.erasedBonds as Set<string>;
+                    const tempCommands = dragData.tempCommands as any[];
+
+                    if (path.length > 0 && path[path.length - 1].distance(worldPos) > 2) {
+                        const p1 = path[path.length - 1];
+                        const p2 = worldPos;
+                        path.push(worldPos);
+                        engineRef.current.setTempEraserPath(path);
+
+                        let newAtomsToRemove: string[] = [];
+                        let newBondsToRemove: string[] = [];
+
+                        molecule.atoms.forEach((atom: Atom) => {
+                            if (!erasedAtoms.has(atom.id)) {
+                                if (atom.pos.distance(p2) < 10 || Vec2D.pointLineSegmentDistance(atom.pos, p1, p2) < 10) {
+                                    newAtomsToRemove.push(atom.id);
+                                    erasedAtoms.add(atom.id);
+                                    molecule.getConnectedBonds(atom.id).forEach((b: Bond) => {
+                                        if (!erasedBonds.has(b.id)) {
+                                            newBondsToRemove.push(b.id);
+                                            erasedBonds.add(b.id);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+
+                        molecule.bonds.forEach((bond: Bond) => {
+                            if (!erasedBonds.has(bond.id)) {
+                                const atomA = molecule.atoms.get(bond.atomA);
+                                const atomB = molecule.atoms.get(bond.atomB);
+                                if (atomA && atomB) {
+                                    const mid = atomA.pos.add(atomB.pos).scale(0.5);
+                                    const q1 = atomA.pos.add(mid).scale(0.5);
+                                    const q2 = atomB.pos.add(mid).scale(0.5);
+
+                                    if (Vec2D.pointLineSegmentDistance(mid, p1, p2) < 10 ||
+                                        Vec2D.pointLineSegmentDistance(q1, p1, p2) < 10 ||
+                                        Vec2D.pointLineSegmentDistance(q2, p1, p2) < 10) {
+                                        newBondsToRemove.push(bond.id);
+                                        erasedBonds.add(bond.id);
+                                    }
+                                }
+                            }
+                        });
+
+                        if (newAtomsToRemove.length > 0 || newBondsToRemove.length > 0) {
+                            const cmd = new RemoveElementsCommand(molecule, newAtomsToRemove, newBondsToRemove);
+                            cmd.execute();
+                            tempCommands.push(cmd);
+                            useCanvasStore.getState().setMolecule(molecule);
+                        }
+                    }
+                }
+            } else if (dragItem.current.type === 'scissor-path') {
+                const page = document.querySelector('.document-page');
+                if (page) {
+                    const rect = page.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    const worldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
+
+                    const dragData = dragItem.current as any;
+                    const path = dragData.path as Vec2D[];
+
+                    if (path.length > 0 && path[path.length - 1].distance(worldPos) > 2) {
+                        path.push(worldPos);
+                        engineRef.current.setTempEraserPath(path);
                     }
                 }
             }
@@ -554,6 +685,61 @@ export const CanvasContainer: React.FC = () => {
                         useCanvasStore.getState().executeCommand(cmd);
                         useCanvasStore.getState().setMolecule(molecule);
                     }
+                }
+            } else if (dragItem.current.type === 'erase-path') {
+                engineRef.current.setTempEraserPath([]); // Clear preview
+                const dragData = dragItem.current as any;
+                const erasedAtomsList = Array.from(dragData.erasedAtoms as Set<string>);
+                const erasedBondsList = Array.from(dragData.erasedBonds as Set<string>);
+                const tempCommands = dragData.tempCommands as any[];
+
+                // Undo temp commands to restore pure state before applying the final mega-command
+                for (let i = tempCommands.length - 1; i >= 0; i--) {
+                    tempCommands[i].undo();
+                }
+
+                if (erasedAtomsList.length > 0 || erasedBondsList.length > 0) {
+                    const cmd = new RemoveElementsCommand(molecule, erasedAtomsList, erasedBondsList);
+                    useCanvasStore.getState().executeCommand(cmd);
+                } else {
+                    // Force a re-render just to clear the trail
+                    useCanvasStore.getState().setMolecule(molecule);
+                }
+            } else if (dragItem.current.type === 'scissor-path') {
+                engineRef.current.setTempEraserPath([]); // Clear preview
+                const dragData = dragItem.current as any;
+                const path = dragData.path as Vec2D[];
+
+                const bondsToCut = new Set<string>();
+
+                // Check intersection of path segments with bonds
+                if (path.length > 1) {
+                    molecule.bonds.forEach((bond: Bond) => {
+                        const atomA = molecule.atoms.get(bond.atomA);
+                        const atomB = molecule.atoms.get(bond.atomB);
+                        if (atomA && atomB) {
+                            for (let i = 0; i < path.length - 1; i++) {
+                                const p1 = path[i];
+                                const p2 = path[i + 1];
+                                if (Vec2D.segmentsIntersect(p1, p2, atomA.pos, atomB.pos)) {
+                                    bondsToCut.add(bond.id);
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                } else if (path.length === 1) {
+                    // It was just a click, handle via hit test
+                    const hitBond = engineRef.current.hitTestBond(path[0]);
+                    if (hitBond) bondsToCut.add(hitBond.id);
+                }
+
+                if (bondsToCut.size > 0) {
+                    const store = useCanvasStore.getState();
+                    const cmd = new CutBondsCommand(molecule, Array.from(bondsToCut), store.scissorMode, store.retrosynthesisMode);
+                    store.executeCommand(cmd);
+                } else {
+                    useCanvasStore.getState().setMolecule(molecule);
                 }
             }
         }

@@ -15,6 +15,9 @@ interface CanvasState {
     activeTool: string;
     activeSubTool: string; // [NEW] Track sub-tool state (e.g., 'RING_5' vs 'ring')
 
+    scissorMode: 'homolytic' | 'heterolytic';
+    retrosynthesisMode: boolean;
+
     activeTemplate: Template | null; // Selected template to place
 
     // Selection
@@ -35,6 +38,8 @@ interface CanvasState {
     setOffset: (offset: Vec2D) => void;
     setActiveLayer: (layer: string) => void;
     setActiveTool: (tool: string, subTool?: string) => void; // [NEW] Optional subTool
+    setScissorMode: (mode: 'homolytic' | 'heterolytic') => void;
+    setRetrosynthesisMode: (enabled: boolean) => void;
     setActiveTemplate: (template: Template | null) => void;
 
     setSelected: (atoms: string[], bonds: string[]) => void;
@@ -60,6 +65,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     activeTool: 'select',
     activeSubTool: 'select', // Default
 
+    scissorMode: 'homolytic',
+    retrosynthesisMode: false,
+
     activeTemplate: null,
 
     selectedAtomIds: [],
@@ -84,6 +92,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             selectedBondIds: []
         }));
     },
+    setScissorMode: (mode) => set({ scissorMode: mode }),
+    setRetrosynthesisMode: (enabled) => set({ retrosynthesisMode: enabled }),
     setActiveTemplate: (t) => set({ activeTemplate: t }),
 
     setSelected: (atoms, bonds) => set({ selectedAtomIds: atoms, selectedBondIds: bonds }),

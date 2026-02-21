@@ -23,6 +23,7 @@ import {
 export const TopHeader: React.FC = () => {
     const {
         molecule, zoom, offset, style,
+        activeTool, scissorMode, setScissorMode,
         setMolecule, setZoom, setOffset, setCommandManager, executeCommand, setStyle
     } = useCanvasStore();
 
@@ -417,6 +418,42 @@ export const TopHeader: React.FC = () => {
                         color: 'blue'
                     });
                 }} />
+
+                {/* Scissor Context Bar */}
+                {activeTool === 'scissor' && (
+                    <>
+                        <Sep />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 8px', background: '#eef2ff', borderRadius: '4px', height: '28px', border: '1px solid #c7d2fe' }}>
+                            <span style={{ fontSize: '11px', fontWeight: 600, color: '#4f46e5' }}>Cleavage Mode:</span>
+                            <button
+                                onClick={() => setScissorMode('homolytic')}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '4px', background: 'transparent', border: 'none', cursor: 'pointer',
+                                    fontSize: '11px', fontWeight: scissorMode === 'homolytic' ? 700 : 500,
+                                    color: scissorMode === 'homolytic' ? '#4f46e5' : '#64748b'
+                                }}
+                            >
+                                <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid', borderColor: scissorMode === 'homolytic' ? '#4f46e5' : '#cbd5e1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    {scissorMode === 'homolytic' && <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4f46e5' }} />}
+                                </div>
+                                Homolytic
+                            </button>
+                            <button
+                                onClick={() => setScissorMode('heterolytic')}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '4px', background: 'transparent', border: 'none', cursor: 'pointer',
+                                    fontSize: '11px', fontWeight: scissorMode === 'heterolytic' ? 700 : 500,
+                                    color: scissorMode === 'heterolytic' ? '#4f46e5' : '#64748b'
+                                }}
+                            >
+                                <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid', borderColor: scissorMode === 'heterolytic' ? '#4f46e5' : '#cbd5e1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    {scissorMode === 'heterolytic' && <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4f46e5' }} />}
+                                </div>
+                                Heterolytic
+                            </button>
+                        </div>
+                    </>
+                )}
 
                 {/* Omni-Search Bar (Gemini Style) */}
                 <div style={{

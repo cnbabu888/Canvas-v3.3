@@ -32,6 +32,20 @@ export class ChemUtils {
                     const mass = this.getAtomicMass(el);
                     weight += mass;
                     counts.set(el, (counts.get(el) || 0) + 1);
+
+                    // Add implicit hydrogens to mass and formula
+                    const bonds = this.getConnectedBonds(atom, molecule);
+                    let bondOrderSum = 0;
+                    bonds.forEach((b: any) => {
+                        if (b.type === 'DOUBLE') bondOrderSum += 2;
+                        else if (b.type === 'TRIPLE') bondOrderSum += 3;
+                        else bondOrderSum += 1;
+                    });
+                    const hCount = this.getImplicitHydrogens(el, bondOrderSum, atom.charge || 0);
+                    if (hCount > 0) {
+                        weight += this.getAtomicMass('H') * hCount;
+                        counts.set('H', (counts.get('H') || 0) + hCount);
+                    }
                 }
             });
         }
@@ -55,6 +69,82 @@ export class ChemUtils {
             weight: parseFloat(weight.toFixed(2)),
             atoms: atomCount,
             bonds: molecule.bonds ? molecule.bonds.size || molecule.bonds.length : 0
+        };
+    }
+
+    // [NEW] Calculate formula/weight for a specific sub-graph (used for Scissor tool)
+    static calculateFragment(molecule: any, startAtomId: string, cutBondId: string) {
+        if (!molecule || !molecule.atoms.has(startAtomId)) return { formula: '', weight: 0, atomIds: new Set<string>() };
+
+        const visitedAtoms = new Set<string>();
+        const queue = [startAtomId];
+        visitedAtoms.add(startAtomId);
+
+        let weight = 0;
+        const counts = new Map<string, number>();
+
+        while (queue.length > 0) {
+            const currentId = queue.shift()!;
+            const atom = molecule.atoms.get(currentId) as Atom;
+            if (!atom) continue;
+
+            const el = atom.element;
+            const data = ELEMENTS.get(el);
+            if (data) {
+                weight += this.getAtomicMass(el);
+                counts.set(el, (counts.get(el) || 0) + 1);
+
+                // Calculate implicit hydrogens but DON'T count the cut bond in the valence math 
+                // Wait, if it's cut homolytically/heterolytically, does the H count change? 
+                // For a simple prediction, let's just assume the bond *is* absent and we want the fragment mass as if it were a radical/ion.
+                // Actually, just calculating the H's *before* the cut gives the accurate "fragment" mass composed of exactly those atoms.
+                // Let's use the actual pre-cut H count for this atom.
+                const bonds = this.getConnectedBonds(atom, molecule);
+                let bondOrderSum = 0;
+                bonds.forEach((b: any) => {
+                    if (b.type === 'DOUBLE') bondOrderSum += 2;
+                    else if (b.type === 'TRIPLE') bondOrderSum += 3;
+                    else bondOrderSum += 1;
+                });
+                const hCount = this.getImplicitHydrogens(el, bondOrderSum, atom.charge || 0);
+                if (hCount > 0) {
+                    weight += this.getAtomicMass('H') * hCount;
+                    counts.set('H', (counts.get('H') || 0) + hCount);
+                }
+            }
+
+            // Traverse neighbors, avoiding the cut bond
+            molecule.bonds.forEach((b: Bond) => {
+                if (b.id !== cutBondId) {
+                    if (b.atomA === currentId && !visitedAtoms.has(b.atomB)) {
+                        visitedAtoms.add(b.atomB);
+                        queue.push(b.atomB);
+                    } else if (b.atomB === currentId && !visitedAtoms.has(b.atomA)) {
+                        visitedAtoms.add(b.atomA);
+                        queue.push(b.atomA);
+                    }
+                }
+            });
+        }
+
+        let formula = '';
+        if (counts.has('C')) {
+            formula += `C${counts.get('C') !== 1 ? counts.get('C') : ''}`;
+            counts.delete('C');
+        }
+        if (counts.has('H')) {
+            formula += `H${counts.get('H') !== 1 ? counts.get('H') : ''}`;
+            counts.delete('H');
+        }
+        const sorted = Array.from(counts.keys()).sort();
+        sorted.forEach(el => {
+            formula += `${el}${counts.get(el) !== 1 ? counts.get(el) : ''}`;
+        });
+
+        return {
+            formula,
+            weight: parseFloat(weight.toFixed(2)),
+            atomIds: visitedAtoms
         };
     }
 

@@ -5,52 +5,86 @@ import { ChemUtils } from '../../chem/ChemUtils';
 import { CPK_COLORS } from '../../styles/StyleManager';
 import type { CanvasStyle } from '../../styles/StyleManager';
 
+/**
+ * Publication-grade atom label renderer.
+ *
+ * Implements exact ChemDraw-quality label rendering:
+ *  - Carbon: hidden in skeleton (shown only when isolated or charged)
+ *  - Heteroatoms: always shown with bold weight
+ *  - Implicit H with correct side placement based on bond angles
+ *  - Subscript H count at 75% font, 3px down
+ *  - Charge superscript at 75% font, 5px up
+ *  - Isotope superscript before element symbol
+ *  - Background halo knockout for clean bond termination
+ *  - Scale-independent sizing (font/halo stay fixed regardless of zoom)
+ */
 export class AtomRenderer {
-    static drawAtom(ctx: CanvasRenderingContext2D, atom: Atom, connectedBonds: Bond[], style: CanvasStyle, scale: number = 1, atomsMap?: Map<string, Atom>) {
+
+    static drawAtom(
+        ctx: CanvasRenderingContext2D,
+        atom: Atom,
+        connectedBonds: Bond[],
+        style: CanvasStyle,
+        scale: number = 1,
+        atomsMap?: Map<string, Atom>,
+    ) {
         const { x, y } = atom.pos;
+
+        // ─── Implicit H calculation ───
+        // implicitH = normalValence - currentBonds - formalCharge
         let bondOrderSum = 0;
         connectedBonds.forEach(b => bondOrderSum += b.order);
-
         const hCount = ChemUtils.getImplicitHydrogens(atom.element, bondOrderSum, atom.charge);
 
-        // 1. Determine if we should draw the label at all
-        let shouldDraw = true;
-
-        // Hide standard backbone Carbons
-        if (atom.element.toUpperCase() === 'C' && connectedBonds.length > 0 && atom.charge === 0) {
-            shouldDraw = false;
+        // ─── Should we draw the label? ───
+        // CARBON RULES:
+        //  - NEVER show C label in skeleton formula (standard chemistry)
+        //  - Exception: show C when atom has zero bonds (isolated atom)
+        //  - Exception: show C when atom has charge (e.g., carbocation C+)
+        const el = atom.element.toUpperCase();
+        if (el === 'C' && connectedBonds.length > 0 && atom.charge === 0) {
+            return; // Standard skeleton: hide backbone C
         }
 
-        if (!shouldDraw) return;
-
-        // Determine left vs right H alignment based on bond center of mass
+        // ─── H PLACEMENT: determine which side using bond angles ───
+        // Count bonds going LEFT vs RIGHT of atom
+        // Put H on the side with FEWER bonds
+        // If equal: put H on RIGHT (default)
         let alignHydrogensRight = true;
 
         if (connectedBonds.length > 0 && atomsMap) {
-            let cx = 0, cy = 0;
+            let bondsLeft = 0;
+            let bondsRight = 0;
+
             connectedBonds.forEach(b => {
                 const neighborId = b.atomA === atom.id ? b.atomB : b.atomA;
                 const neighbor = atomsMap.get(neighborId);
                 if (neighbor) {
-                    cx += neighbor.pos.x - atom.pos.x;
-                    cy += neighbor.pos.y - atom.pos.y;
+                    const dx = neighbor.pos.x - atom.pos.x;
+                    if (dx < -0.01) bondsLeft++;
+                    else if (dx > 0.01) bondsRight++;
+                    // Vertical bonds (dx ≈ 0) don't count for L/R
                 }
             });
-            // If the center of mass of neighbors is to the right (cx > 0), place Hydrogens on the LEFT.
-            if (cx > 0.01) {
-                alignHydrogensRight = false;
+
+            // Put H on side with FEWER bonds
+            if (bondsLeft < bondsRight) {
+                alignHydrogensRight = false; // fewer bonds on left → H goes left
+            } else if (bondsRight < bondsLeft) {
+                alignHydrogensRight = true;  // fewer bonds on right → H goes right
             }
+            // If equal: default right (already set)
         }
 
-        let mainLabel = atom.element;
+        // ─── Build label parts ───
+        const mainLabel = atom.element;
         let leftLabel = '';
         let rightLabel = '';
         let leftSub = '';
         let rightSub = '';
 
+        // H placement
         if (hCount > 0) {
-            // Let's implement a quick heuristic: if there's only 1 bond, and it goes right, H goes left.
-            // For now, without position data, default to right.
             if (alignHydrogensRight) {
                 rightLabel = 'H';
                 if (hCount > 1) rightSub = hCount.toString();
@@ -60,85 +94,180 @@ export class AtomRenderer {
             }
         }
 
-        // 3. Draw the combined Text with Halos
+        // ─── Font setup (scale-independent) ───
         const fontSize = style.atomFontSize / scale;
         const subFontSize = style.subscriptFontSize / scale;
+        const fontWeight = 'bold'; // Heteroatom labels always bold
+        const fontStr = `${fontWeight} ${fontSize}px ${style.atomFont}`;
+        const subFontStr = `${fontWeight} ${subFontSize}px ${style.atomFont}`;
 
-        ctx.font = `bold ${fontSize}px ${style.atomFont}`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        // Custom Coloring check
+        // ─── Atom color ───
+        // ACS/RSC/Wiley: ALL black #000000
+        // Chemora Modern: colored by element
         let atomColor = style.color;
-        if (style.colorByElement && atom.element !== 'C' && atom.element !== 'H') {
+        if (style.colorByElement && atom.element !== 'C') {
             atomColor = CPK_COLORS[atom.element] || style.color;
         }
 
-        ctx.fillStyle = atomColor;
-        ctx.strokeStyle = style.backgroundColor;
-        ctx.lineWidth = style.marginWidth / scale; // Fixed width halo!
+        // ═══════════════════════════════════════════
+        //  MEASURE total label width for halo knockout
+        // ═══════════════════════════════════════════
+        const haloMargin = style.marginWidth / scale;
 
-        // Draw Element Symbol
-        ctx.strokeText(mainLabel, x, y);
-        ctx.fillText(mainLabel, x, y);
+        ctx.font = fontStr;
+        const mainMetrics = ctx.measureText(mainLabel);
+        const mainW = mainMetrics.width;
+        const halfMain = mainW / 2;
+        const gap = 1 / scale; // 1px gap between label parts
 
-        const elementMetrics = ctx.measureText(mainLabel);
-        const halfWidth = elementMetrics.width / 2;
+        // Measure isotope (before element)
+        let isotopeW = 0;
+        const isotope = atom.isotope;
+        if (isotope) {
+            ctx.font = subFontStr;
+            isotopeW = ctx.measureText(isotope.toString()).width + gap;
+        }
 
-        // Draw Left H
+        // Measure left H + sub
+        let leftW = 0;
         if (leftLabel) {
-            ctx.font = `bold ${fontSize}px ${style.atomFont}`;
-            ctx.textAlign = 'right';
-            const hx = x - halfWidth - (1 / scale);
-            ctx.strokeText(leftLabel, hx, y);
-            ctx.fillText(leftLabel, hx, y);
-
+            ctx.font = fontStr;
+            leftW += ctx.measureText(leftLabel).width + gap;
             if (leftSub) {
-                const subOffset = ctx.measureText(leftLabel).width;
-                ctx.font = `bold ${subFontSize}px ${style.atomFont}`;
-                ctx.textAlign = 'right';
-                ctx.strokeText(leftSub, hx - subOffset, y + (4 / scale));
-                ctx.fillText(leftSub, hx - subOffset, y + (4 / scale));
+                ctx.font = subFontStr;
+                leftW += ctx.measureText(leftSub).width;
             }
         }
 
-        // Draw Right H
+        // Measure right H + sub
+        let rightW = 0;
         if (rightLabel) {
-            ctx.font = `bold ${fontSize}px ${style.atomFont}`;
+            ctx.font = fontStr;
+            rightW += ctx.measureText(rightLabel).width + gap;
+            if (rightSub) {
+                ctx.font = subFontStr;
+                rightW += ctx.measureText(rightSub).width;
+            }
+        }
+
+        // Measure charge
+        let chargeW = 0;
+        if (atom.charge !== 0) {
+            let chargeLabel = atom.charge > 0 ? '+' : '−';
+            if (Math.abs(atom.charge) > 1) chargeLabel = `${Math.abs(atom.charge)}${chargeLabel}`;
+            ctx.font = subFontStr;
+            chargeW = ctx.measureText(chargeLabel).width + gap;
+        }
+
+        const totalW = isotopeW + leftW + mainW + rightW + chargeW;
+
+        // ═══════════════════════════════════════════
+        //  HALO KNOCKOUT — clear rectangle behind label
+        // ═══════════════════════════════════════════
+        const haloH = fontSize * 1.3;
+        const haloFullW = totalW + haloMargin * 2;
+        // Center of the full label string (accounting for isotope + left side)
+        const labelCenterX = x + (rightW + chargeW - isotopeW - leftW) / 2;
+
+        ctx.fillStyle = style.backgroundColor;
+        ctx.fillRect(
+            labelCenterX - haloFullW / 2,
+            y - haloH / 2,
+            haloFullW,
+            haloH,
+        );
+
+        // ═══════════════════════════════════════════
+        //  DRAW ISOTOPE (superscript BEFORE element symbol)
+        // ═══════════════════════════════════════════
+        ctx.fillStyle = atomColor;
+
+        if (isotope) {
+            ctx.font = subFontStr;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            // Position: right edge at (x - halfMain - gap), shifted UP 5px
+            const isoX = x - halfMain - gap;
+            ctx.fillText(isotope.toString(), isoX, y - (5 / scale));
+        }
+
+        // ═══════════════════════════════════════════
+        //  DRAW LEFT H (e.g. "H₂N")
+        // ═══════════════════════════════════════════
+        if (leftLabel) {
+            // Draw subscript first (leftmost), then H letter
+            let cursorX = x - halfMain - gap;
+
+            // Draw H
+            ctx.font = fontStr;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(leftLabel, cursorX, y);
+
+            // Draw subscript to the LEFT of H
+            if (leftSub) {
+                const hLabelW = ctx.measureText(leftLabel).width;
+                ctx.font = subFontStr;
+                ctx.textAlign = 'right';
+                // Subscript: 3px DOWN from baseline
+                ctx.fillText(leftSub, cursorX - hLabelW, y + (3 / scale));
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        //  DRAW ELEMENT SYMBOL (center)
+        // ═══════════════════════════════════════════
+        ctx.font = fontStr;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = atomColor;
+        ctx.fillText(mainLabel, x, y);
+
+        // ═══════════════════════════════════════════
+        //  DRAW RIGHT H (e.g. "NH₂")
+        // ═══════════════════════════════════════════
+        if (rightLabel) {
+            const hx = x + halfMain + gap;
+
+            ctx.font = fontStr;
             ctx.textAlign = 'left';
-            const hx = x + halfWidth + (1 / scale);
-            ctx.strokeText(rightLabel, hx, y);
+            ctx.textBaseline = 'middle';
             ctx.fillText(rightLabel, hx, y);
 
             if (rightSub) {
-                const subOffset = ctx.measureText(rightLabel).width;
-                ctx.font = `bold ${subFontSize}px ${style.atomFont}`;
+                ctx.font = fontStr;
+                const hLabelW = ctx.measureText(rightLabel).width;
+                ctx.font = subFontStr;
                 ctx.textAlign = 'left';
-                ctx.strokeText(rightSub, hx + subOffset, y + (4 / scale));
-                ctx.fillText(rightSub, hx + subOffset, y + (4 / scale));
+                // Subscript: 3px DOWN from baseline
+                ctx.fillText(rightSub, hx + hLabelW, y + (3 / scale));
             }
         }
 
-        // Draw Charge
+        // ═══════════════════════════════════════════
+        //  DRAW CHARGE (superscript AFTER everything)
+        // ═══════════════════════════════════════════
         if (atom.charge !== 0) {
-            let chargeLabel = atom.charge > 0 ? '+' : '-';
+            let chargeLabel = atom.charge > 0 ? '+' : '−'; // proper minus sign (U+2212)
             if (Math.abs(atom.charge) > 1) chargeLabel = `${Math.abs(atom.charge)}${chargeLabel}`;
 
-            // Calculate offset based on whether we drew a subscript or just main text
-            let offsetBase = halfWidth;
+            // Calculate horizontal offset: past element + right H + right sub
+            let offsetX = halfMain;
             if (rightLabel) {
-                ctx.font = `bold ${fontSize}px ${style.atomFont}`;
-                offsetBase += ctx.measureText(rightLabel).width;
+                ctx.font = fontStr;
+                offsetX += ctx.measureText(rightLabel).width + gap;
                 if (rightSub) {
-                    ctx.font = `bold ${subFontSize}px ${style.atomFont}`;
-                    offsetBase += ctx.measureText(rightSub).width;
+                    ctx.font = subFontStr;
+                    offsetX += ctx.measureText(rightSub).width;
                 }
             }
 
-            ctx.font = `bold ${subFontSize}px ${style.atomFont}`;
+            ctx.font = subFontStr;
             ctx.textAlign = 'left';
-            ctx.strokeText(chargeLabel, x + offsetBase, y - (6 / scale));
-            ctx.fillText(chargeLabel, x + offsetBase, y - (6 / scale));
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = atomColor; // Same color as atom label
+            // Superscript: 5px UP from baseline
+            ctx.fillText(chargeLabel, x + offsetX + gap, y - (5 / scale));
         }
     }
 }

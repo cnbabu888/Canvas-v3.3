@@ -4,17 +4,20 @@ import { Vec2D } from '../math/Vec2D';
 import { BondRenderer } from './renderer/BondRenderer';
 import { AtomRenderer } from './renderer/AtomRenderer';
 import { Bond, BondType } from '../molecular/Bond';
+import { Atom } from '../molecular/Atom';
 import { RingGenerator } from '../chem/RingGenerator';
 import { AddRingCommand } from '../commands/AddRingCommand';
 import { AddTemplateCommand } from '../commands/AddTemplateCommand';
 import { StereoEngine, type StereoLabel } from '../chem/StereoEngine';
 import { ChangePropertyCommand } from '../commands/ChangePropertyCommand';
+import { ChemUtils } from '../chem/ChemUtils';
 
 import { DEFAULT_STYLE, type CanvasStyle } from '../styles/StyleManager';
 import { LabWareRenderer, type LabWare } from '../chem/LabWare';
 import type { Arrow } from '../chem/Arrow';
 import { ArrowType } from '../chem/Arrow';
 import { ArrowRenderer } from './renderer/ArrowRenderer';
+import { RemoveElementsCommand } from '../commands/RemoveElementsCommand';
 
 const BOND_TOOL_MAP: Record<string, BondType> = {
     'BOND_SINGLE': BondType.SINGLE,
@@ -55,7 +58,6 @@ export class CanvasEngine {
     private style: CanvasStyle = DEFAULT_STYLE;
 
     // Data
-    // Data
     private molecule: any = null;
     private labware: LabWare[] = [];
 
@@ -73,6 +75,7 @@ export class CanvasEngine {
     // Temp Bond for Dragging
     private tempBond: { from: Vec2D; to: Vec2D; type: BondType } | null = null;
     private tempArrow: Arrow | null = null;
+    private tempEraserPath: Vec2D[] = []; // [NEW] Path for eraser dragging
 
 
     // Callbacks
@@ -121,6 +124,12 @@ export class CanvasEngine {
                 this.hoverItem = { type: 'bond', item: bond };
                 found = true;
             }
+        }
+
+        // If Erasing or Scissoring, hover atom or bond
+        if (this.activeTool === 'erase' || this.activeTool === 'scissor') {
+            // Let CanvasContainer handle drag, we just show hover
+            this.invalidate();
         }
 
         if (!found) this.hoverItem = null;
@@ -205,6 +214,11 @@ export class CanvasEngine {
 
     public clearTempArrow() {
         this.tempArrow = null;
+        this.invalidate();
+    }
+
+    public setTempEraserPath(path: Vec2D[]) {
+        this.tempEraserPath = path;
         this.invalidate();
     }
 
@@ -365,7 +379,136 @@ export class CanvasEngine {
     }
 
     private drawPreview(ctx: CanvasRenderingContext2D) {
-        // Temp Bond
+        const scale = this.transform.a;
+
+        // Eraser trail & hover
+        if (this.activeTool === 'erase') {
+            // Draw hover target
+            if (this.hoverItem?.type === 'atom' && !this.tempEraserPath.length) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+                ctx.beginPath();
+                ctx.arc(this.hoverItem.item.pos.x, this.hoverItem.item.pos.y, 10, 0, Math.PI * 2);
+                ctx.fill();
+            } else if (this.hoverItem?.type === 'bond' && !this.tempEraserPath.length) {
+                const bond = this.hoverItem.item;
+                const atomA = this.molecule?.atoms.get(bond.atomA);
+                const atomB = this.molecule?.atoms.get(bond.atomB);
+                if (atomA && atomB) {
+                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
+                    ctx.lineWidth = 10;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(atomA.pos.x, atomA.pos.y);
+                    ctx.lineTo(atomB.pos.x, atomB.pos.y);
+                    ctx.stroke();
+                }
+            }
+
+            // Draw red cursor circle at mouse
+            const worldPos = this.screenToWorld(this.mousePos);
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+            ctx.beginPath();
+            ctx.arc(worldPos.x, worldPos.y, 10 / scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw drag path
+            if (this.tempEraserPath.length > 1) {
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+                ctx.lineWidth = 20 / scale; // 10px radius = 20px width
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+                ctx.moveTo(this.tempEraserPath[0].x, this.tempEraserPath[0].y);
+                for (let i = 1; i < this.tempEraserPath.length; i++) {
+                    ctx.lineTo(this.tempEraserPath[i].x, this.tempEraserPath[i].y);
+                }
+                ctx.stroke();
+            }
+        }
+
+        // Scissor Tool Hover & Drag Path
+        if (this.activeTool === 'scissor') {
+            if (this.hoverItem?.type === 'bond' && !this.tempEraserPath.length) {
+                const bond = this.hoverItem.item;
+                const atomA = this.molecule?.atoms.get(bond.atomA);
+                const atomB = this.molecule?.atoms.get(bond.atomB);
+
+                if (atomA && atomB) {
+                    // Draw red cut indicator on bond
+                    ctx.strokeStyle = '#ef4444'; // Red-500
+                    ctx.lineWidth = 4 / scale;
+                    ctx.setLineDash([4 / scale, 4 / scale]);
+                    ctx.beginPath();
+                    // Draw a short line perpendicular to the bond center
+                    const mid = atomA.pos.add(atomB.pos).scale(0.5);
+                    const vec = atomB.pos.minus(atomA.pos).normalize();
+                    const perp = new Vec2D(-vec.y, vec.x).scale(15 / scale);
+                    ctx.moveTo(mid.x - perp.x, mid.y - perp.y);
+                    ctx.lineTo(mid.x + perp.x, mid.y + perp.y);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    // Calculate Fragments MW for Preview Tooltip
+                    const fragA = ChemUtils.calculateFragment(this.molecule, atomA.id, bond.id);
+                    const fragB = ChemUtils.calculateFragment(this.molecule, atomB.id, bond.id);
+
+                    // Draw Tooltip pill
+                    ctx.font = `bold ${10 / scale}px Inter, sans-serif`;
+                    const text1 = `${fragA.weight}g/mol`;
+                    const text2 = `${fragB.weight}g/mol`;
+                    const text = `${text1} | ${text2}`;
+
+                    const metrics = ctx.measureText(text);
+                    const paddingX = 8 / scale;
+                    const paddingY = 4 / scale;
+                    const mw = metrics.width + paddingX * 2;
+                    const mh = (14 / scale) + paddingY * 2;
+
+                    const tx = this.mousePos.x / scale; // Note: if scale involves translate, use screenToWorld correctly
+                    const worldPos = this.screenToWorld(this.mousePos);
+                    const px = worldPos.x + 15 / scale;
+                    const py = worldPos.y - 15 / scale;
+
+                    // Background
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.strokeStyle = '#cbd5e1';
+                    ctx.lineWidth = 1 / scale;
+                    ctx.beginPath();
+                    ctx.roundRect(px, py - mh, mw, mh, 4 / scale);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Text
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = '#4f46e5'; // Indigo-600
+                    ctx.fillText(text1, px + paddingX, py - mh / 2);
+
+                    const sepStr = ' | ';
+                    const w1 = ctx.measureText(text1).width;
+                    ctx.fillStyle = '#94a3b8';
+                    ctx.fillText(sepStr, px + paddingX + w1, py - mh / 2);
+
+                    const wSep = ctx.measureText(sepStr).width;
+                    ctx.fillStyle = '#10b981'; // Emerald-500
+                    ctx.fillText(text2, px + paddingX + w1 + wSep, py - mh / 2);
+                }
+            }
+
+            // Draw drag path (cut line)
+            if (this.tempEraserPath.length > 1) {
+                ctx.strokeStyle = '#ef4444'; // Red-500
+                ctx.lineWidth = 2 / scale;
+                ctx.setLineDash([6 / scale, 6 / scale]);
+                ctx.beginPath();
+                ctx.moveTo(this.tempEraserPath[0].x, this.tempEraserPath[0].y);
+                for (let i = 1; i < this.tempEraserPath.length; i++) {
+                    ctx.lineTo(this.tempEraserPath[i].x, this.tempEraserPath[i].y);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
         if (this.tempBond) {
             const dummyAtomA = { pos: this.tempBond.from, element: 'C' };
             const dummyAtomB = { pos: this.tempBond.to, element: 'C' };
@@ -398,10 +541,7 @@ export class CanvasEngine {
 
         // Template Ghost
         if (this.activeTool === 'template' && this.activeTemplate) {
-            const worldPos = this.screenToWorld(this.mousePos);
-
-            // Should align to atom if hovering?
-            let origin = worldPos;
+            let origin = this.screenToWorld(this.mousePos);
             if (this.hoverItem?.type === 'atom') {
                 origin = this.hoverItem.item.pos;
             }
@@ -409,9 +549,6 @@ export class CanvasEngine {
             ctx.globalAlpha = 0.5;
 
             // Draw Template Atoms/Bonds relative to origin
-            // Template coords are relative to (0,0) usually
-            // We just translate them
-
             this.activeTemplate.atoms.forEach((tAtom: any) => {
                 const pos = new Vec2D(origin.x + tAtom.x, origin.y + tAtom.y);
                 ctx.fillStyle = '#0066CC';
@@ -441,28 +578,17 @@ export class CanvasEngine {
 
             // Sprout Line
             if (this.hoverItem?.type === 'atom') {
-                // Draw dashed line to template origin/attachment point (atom 0 by default)
                 ctx.strokeStyle = '#22c55e'; // Green for sprout
                 ctx.setLineDash([4, 4]);
                 ctx.beginPath();
-                ctx.moveTo(origin.x, origin.y); // Already same as p0 if we align origin?
-                // Actually if we align origin to hover atom, they overlap.
-                // Maybe we should offset the template?
-                // Prompt says "Sprout". Usually means new bond.
-                // So template should be placed AWAY from atom.
-                // For MVP, simple placement at mouse pos is easier, but snapping to atom is better.
-
-                // If snapping, let's just draw bond from Hover Atom to Template Atom 0
-                // But if we aligned them (origin = hover atom pos), then Atom 0 is AT Hover Atom. That means FUSION/REPLACEMENT.
-                // If we want SPROUT, we need to place template at neighbor pos?
-                // Let's stick to simple "Place at exact pos" for now, and if hovering, maybe just highlight?
-                // Let's keep the logic simple: origin = worldPos (mouse).
-                // If hovering atom, draw line from atom to template.
+                ctx.moveTo(origin.x, origin.y);
+                const mouseWorldPos = this.screenToWorld(this.mousePos);
+                ctx.lineTo(mouseWorldPos.x, mouseWorldPos.y);
+                ctx.stroke();
             }
 
             ctx.setLineDash([]);
             ctx.globalAlpha = 1.0;
-            return;
         }
 
         // Ghost Preview for Ring Tools
@@ -516,18 +642,98 @@ export class CanvasEngine {
             }
 
             ctx.globalAlpha = 1.0;
-            ctx.globalAlpha = 1.0;
-        }
-    }
+        } // [FIXED] Closing brace for ring ghost preview
+    } // [FIXED] Closing brace for drawPreview
+
     private drawMolecule(ctx: CanvasRenderingContext2D, molecule: any) {
         const scale = this.transform.a;
-        // Draw Bonds
+        // ─── Ring Detection (SSSR-lite) for double bond offset ───
+        // Find small rings (3-8 members) so we can pass centroids to BondRenderer
+        const ringMap = new Map<string, { x: number; y: number }>(); // bondId → ring centroid
+        if (molecule.bonds && molecule.atoms) {
+            // Build adjacency from bonds
+            const adj = new Map<string, { neighbor: string; bondId: string }[]>();
+            molecule.atoms.forEach((_: any, id: string) => adj.set(id, []));
+            molecule.bonds.forEach((b: any) => {
+                adj.get(b.atomA)?.push({ neighbor: b.atomB, bondId: b.id });
+                adj.get(b.atomB)?.push({ neighbor: b.atomA, bondId: b.id });
+            });
+
+            // DFS-based small ring finder (max ring size 8)
+            const foundRings: string[][] = [];
+            const atomIds = Array.from(molecule.atoms.keys()) as string[];
+
+            for (const startId of atomIds) {
+                // BFS from startId looking for cycles back to startId
+                const queue: { path: string[]; bondPath: string[] }[] = [];
+                const neighbors = adj.get(startId) || [];
+                for (const nb of neighbors) {
+                    queue.push({ path: [startId, nb.neighbor], bondPath: [nb.bondId] });
+                }
+
+                while (queue.length > 0) {
+                    const { path, bondPath } = queue.shift()!;
+                    const last = path[path.length - 1];
+                    if (path.length > 8) continue; // Max ring size
+
+                    for (const nb of (adj.get(last) || [])) {
+                        if (nb.neighbor === startId && path.length >= 3) {
+                            // Found a ring! Only keep if it's the canonical (smallest startId) form
+                            const ringAtoms = [...path];
+                            const minAtom = ringAtoms.reduce((a, b) => a < b ? a : b);
+                            if (minAtom === startId) {
+                                // Check if we already have this ring (by sorted atom ids)
+                                const key = [...ringAtoms].sort().join(',');
+                                if (!foundRings.some(r => [...r].sort().join(',') === key)) {
+                                    foundRings.push(ringAtoms);
+                                    // Calculate centroid
+                                    let cx = 0, cy = 0;
+                                    for (const aid of ringAtoms) {
+                                        const a = molecule.atoms.get(aid);
+                                        if (a) { cx += a.pos.x; cy += a.pos.y; }
+                                    }
+                                    cx /= ringAtoms.length;
+                                    cy /= ringAtoms.length;
+                                    const centroid = { x: cx, y: cy };
+
+                                    // Map each bond in this ring to the centroid
+                                    for (const bid of bondPath) {
+                                        if (!ringMap.has(bid)) ringMap.set(bid, centroid);
+                                    }
+                                    // Also map the closing bond
+                                    const closingBonds = (adj.get(last) || []).filter(n => n.neighbor === startId);
+                                    for (const cb of closingBonds) {
+                                        if (!ringMap.has(cb.bondId)) ringMap.set(cb.bondId, centroid);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        if (path.includes(nb.neighbor)) continue; // Already visited
+                        if (path.length < 8) {
+                            queue.push({
+                                path: [...path, nb.neighbor],
+                                bondPath: [...bondPath, nb.bondId],
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Draw Bonds (with ring centroid info)
         if (molecule.bonds) {
             molecule.bonds.forEach((bond: any) => {
                 const atomA = molecule.atoms.get(bond.atomA);
                 const atomB = molecule.atoms.get(bond.atomB);
                 if (atomA && atomB) {
-                    BondRenderer.drawBond(ctx, bond, atomA, atomB, this.style, scale);
+                    let connA = 0, connB = 0;
+                    molecule.bonds.forEach((b: any) => {
+                        if (b.atomA === bond.atomA || b.atomB === bond.atomA) connA++;
+                        if (b.atomA === bond.atomB || b.atomB === bond.atomB) connB++;
+                    });
+                    const centroid = ringMap.get(bond.id);
+                    BondRenderer.drawBond(ctx, bond, atomA, atomB, this.style, scale, connA, connB, centroid);
                 }
             });
         }
@@ -543,6 +749,43 @@ export class CanvasEngine {
                     });
                 }
                 AtomRenderer.drawAtom(ctx, atom, connectedBonds, this.style, scale, molecule.atoms);
+            });
+        }
+
+        // Draw Badges
+        if (molecule.badges) {
+            molecule.badges.forEach((badge: any) => {
+                // Draw a simple floating pill with MW/formula text
+                // Since this badge is purely visual, we dynamically calculate the MW if text is '-'
+                let displayText = badge.text;
+                if (displayText === '-') {
+                    const frag = ChemUtils.calculateFragment(molecule, badge.atomId, '');
+                    displayText = `${frag.weight}g/mol`;
+                    badge.text = displayText; // Cache it
+                }
+
+                ctx.font = `bold ${10}px Inter, sans-serif`;
+                const metrics = ctx.measureText(displayText);
+                const paddingX = 6;
+                const paddingY = 4;
+                const w = metrics.width + paddingX * 2;
+                const h = 14 + paddingY * 2;
+
+                const bx = badge.pos.x - w / 2;
+                const by = badge.pos.y - h / 2;
+
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.strokeStyle = '#cbd5e1';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(bx, by, w, h, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#4f46e5';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(displayText, badge.pos.x, badge.pos.y);
             });
         }
     }
@@ -633,6 +876,41 @@ export class CanvasEngine {
     public handleClick(screenPoint: Vec2D, clickCount: number = 1, isAdditive: boolean = false) {
         if (!this.molecule) return;
 
+        // Handle Eraser Tool
+        if (this.activeTool === 'erase') {
+            if (this.hoverItem) {
+                let atomsToRemove: string[] = [];
+                let bondsToRemove: string[] = [];
+
+                if (this.hoverItem.type === 'atom') {
+                    if (clickCount >= 2) {
+                        // Double click atom: delete entire connected component
+                        const component = this.getConnectedComponent(this.hoverItem.item.id, null);
+                        atomsToRemove = component.atoms;
+                        bondsToRemove = component.bonds;
+                    } else {
+                        // Single click atom: delete atom and its bonds
+                        atomsToRemove = [this.hoverItem.item.id];
+                        bondsToRemove = this.molecule.getConnectedBonds(this.hoverItem.item.id).map(b => b.id);
+                    }
+                } else if (this.hoverItem.type === 'bond') {
+                    // Single click bond: delete only bond
+                    bondsToRemove = [this.hoverItem.item.id];
+                }
+
+                if (atomsToRemove.length > 0 || bondsToRemove.length > 0) {
+                    const cmd = new RemoveElementsCommand(this.molecule, atomsToRemove, bondsToRemove);
+                    if (this.onAction) {
+                        this.onAction(cmd);
+                    } else {
+                        cmd.execute();
+                        this.invalidate();
+                    }
+                }
+            }
+            return;
+        }
+
         // Handle Template Tool
         if (this.activeTool === 'template' && this.activeTemplate) {
             const worldPoint = this.screenToWorld(screenPoint);
@@ -681,9 +959,10 @@ export class CanvasEngine {
         }
 
         // Handle Ring Tool Click
-        if (this.activeTool.startsWith('RING_') || this.activeTool === 'BENZENE') {
+        // Accept both specific sub-tool IDs ('BENZENE', 'RING_6') and the parent group ID ('ring')
+        if (this.activeTool.startsWith('RING_') || this.activeTool === 'BENZENE' || this.activeTool === 'ring') {
             let sides = 6;
-            if (this.activeTool === 'BENZENE') sides = 6;
+            if (this.activeTool === 'BENZENE' || this.activeTool === 'ring') sides = 6;
             else if (this.activeTool === 'RING_NAPHTHALENE') sides = 0;
             else if (this.activeTool === 'RING_ANTHRACENE') sides = 0;
             else sides = parseInt(this.activeTool.split('_')[1]);
@@ -737,6 +1016,52 @@ export class CanvasEngine {
             return;
         }
 
+        // Handle Bond Tool Click on Empty Space (create atom + bond from scratch)
+        if (this.activeTool.startsWith('BOND_') || this.activeTool === 'bond') {
+            const worldPoint = this.screenToWorld(screenPoint);
+
+            // Check if clicking an existing atom — if so, toggle bond type
+            let hitAtom = null;
+            for (const atom of this.molecule.atoms.values()) {
+                if (atom.pos.distance(worldPoint) < 10) {
+                    hitAtom = atom;
+                    break;
+                }
+            }
+
+            if (!hitAtom) {
+                // Create two atoms + a bond from scratch
+                const style = this.style;
+                const bondLen = style?.bondLength || 40;
+                // Default bond direction: 30° from horizontal (standard chemistry convention)
+                const angle = -Math.PI / 6; // -30° = upward right
+                const startPos = worldPoint;
+                const endPos = new Vec2D(
+                    worldPoint.x + bondLen * Math.cos(angle),
+                    worldPoint.y + bondLen * Math.sin(angle)
+                );
+
+                let bondType: any = 'SINGLE';
+                let order = 1;
+                if (this.activeTool === 'BOND_DOUBLE') { bondType = 'DOUBLE'; order = 2; }
+                else if (this.activeTool === 'BOND_TRIPLE') { bondType = 'TRIPLE'; order = 3; }
+                else if (this.activeTool === 'BOND_WEDGE_SOLID') bondType = BondType.WEDGE_SOLID;
+                else if (this.activeTool === 'BOND_WEDGE_HASH') bondType = BondType.WEDGE_HASH;
+                else if (this.activeTool === 'BOND_DATIVE') bondType = BondType.DATIVE;
+                else if (this.activeTool === 'BOND_WAVY') bondType = BondType.WAVY;
+
+                // Directly add atoms and bond to molecule
+                const atomA = new Atom(crypto.randomUUID(), 'C', startPos);
+                const atomB = new Atom(crypto.randomUUID(), 'C', endPos);
+                this.molecule.addAtom(atomA);
+                this.molecule.addAtom(atomB);
+
+                const newBond = new Bond(crypto.randomUUID(), atomA.id, atomB.id, order, bondType);
+                this.molecule.addBond(newBond);
+                this.invalidate();
+            }
+            return;
+        }
 
 
         // Handle Functional Groups
