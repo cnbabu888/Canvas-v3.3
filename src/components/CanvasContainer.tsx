@@ -5,7 +5,6 @@ import { useCanvasStore } from '../store/useCanvasStore';
 import { Vec2D } from '../math/Vec2D';
 import { Matrix2D } from '../math/Matrix2D';
 import { MoveElementsCommand } from '../commands/MoveElementsCommand';
-import { CommandDock } from './layout/CommandDock';
 import { TemplatesPanel } from './layout/TemplatesPanel';
 import { Bond, BondType } from '../molecular/Bond';
 import { Atom } from '../molecular/Atom';
@@ -688,8 +687,6 @@ export const CanvasContainer: React.FC = () => {
                 </div>
             </div>
 
-            {/* Command Dock Overlay */}
-            <CommandDock />
             <TemplatesPanel />
         </div>
     );

@@ -349,7 +349,7 @@ export const TopHeader: React.FC = () => {
                     <button style={{ display: 'inline-flex', padding: '1px 8px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#666', fontWeight: 500, fontSize: '12px', borderRadius: '2px' }} onClick={handleExportSVG} onMouseEnter={e => e.currentTarget.style.background = '#e8e8e8'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>Export SVG</button>
                 </div>
                 <div style={{ marginLeft: 'auto', fontSize: '10px', color: '#aaa', fontWeight: 500, letterSpacing: '0.5px' }}>
-                    Chemora Canvas v3.2
+                    Chemora Canvas v3.3
                 </div>
             </div>
 

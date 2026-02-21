@@ -1,5 +1,6 @@
 import React from 'react';
 import { TopHeader } from './TopHeader';
+import { CommandDock } from './CommandDock';
 import { PropertiesWidget } from '../widgets/PropertiesWidget';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, RotateCw } from 'lucide-react';
@@ -58,15 +59,15 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 <TopHeader />
             </div>
 
-            {/* Main Content Area */}
-            <div className="flex flex-1 overflow-hidden relative flex-row">
+            {/* Main Content Area — takes all remaining space between header and status bar */}
+            <div className="flex flex-1 overflow-hidden relative flex-row" style={{ minHeight: 0 }}>
 
                 {/* Left Toolbar */}
                 <div className="flex-none" style={{ position: 'relative', zIndex: 30 }}>
                     {leftPanel}
                 </div>
 
-                {/* Canvas Area */}
+                {/* Canvas Area — position: relative so CommandDock can overlay */}
                 <div className="flex-1 overflow-hidden" style={{ position: 'relative', zIndex: 1 }}>
                     {children}
 
@@ -79,6 +80,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                     >
                         {isRightPanelOpen ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
                     </button>
+
+                    {/* Command Dock — absolute overlay above the canvas, anchored to bottom center */}
+                    <CommandDock />
                 </div>
 
                 {/* Right Properties Panel — Resizable */}
@@ -116,8 +120,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 {!isRightPanelOpen && null}
             </div>
 
-            {/* Bottom Status Bar */}
+            {/* Bottom Status Bar — always visible, flex-none */}
             <div
+                className="flex-none"
                 style={{
                     height: '28px',
                     background: '#f0f0f0',
