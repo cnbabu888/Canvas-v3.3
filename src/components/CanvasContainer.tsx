@@ -136,7 +136,7 @@ export const CanvasContainer: React.FC = () => {
     // Drag State
     const isDragging = useRef(false);
     const dragStartWorldPos = useRef<Vec2D | null>(null);
-    const dragItem = useRef<{ type: 'atom' | 'selection' | 'selection-rubberband' | 'bond-create' | 'arrow-create', ids: string[], startPos?: Vec2D, toolId?: string } | null>(null);
+    const dragItem = useRef<{ type: 'atom' | 'selection' | 'selection-rubberband' | 'selection-lasso' | 'bond-create' | 'arrow-create', ids: string[], startPos?: Vec2D, toolId?: string } | null>(null);
     const dragStartPos = useRef<{ x: number, y: number } | null>(null);
 
     // Pan State
@@ -183,7 +183,7 @@ export const CanvasContainer: React.FC = () => {
             const worldPos = engineRef.current.screenToWorld(screenPos);
 
             // Check if hitting an atom (for dragging)
-            if (activeTool === 'select') {
+            if (activeTool === 'select' || activeTool === 'lasso') {
                 let hitAtomId: string | null = null;
                 if (molecule && molecule.atoms) {
                     for (const atom of molecule.atoms.values()) {
@@ -225,17 +225,34 @@ export const CanvasContainer: React.FC = () => {
                         return;
                     }
 
-                    // Otherwise, start rubber band
+                    // Otherwise, start rubber band or lasso
                     if (!hitBond) {
                         isDragging.current = true;
                         dragStartWorldPos.current = worldPos;
-                        dragItem.current = { type: 'selection-rubberband', ids: [] };
+
+                        if (activeSubTool === 'select-lasso' || activeTool === 'lasso') {
+                            dragItem.current = { type: 'selection-lasso', ids: [] };
+                            engineRef.current.setLassoPath([worldPos]);
+                        } else {
+                            dragItem.current = { type: 'selection-rubberband', ids: [] };
+                        }
+
                         dragStartPos.current = { x: e.clientX, y: e.clientY };
                         window.addEventListener('mousemove', handleGlobalDragMove);
                         window.addEventListener('mouseup', handleGlobalDragUp);
                         return;
                     }
                 }
+            }
+
+            // Pan Tool Drag
+            if (activeTool === 'pan') {
+                isDragging.current = true;
+                dragStartPos.current = { x: e.clientX, y: e.clientY };
+                dragItem.current = { type: 'selection', ids: [] }; // reuse type, won't move atoms
+                window.addEventListener('mousemove', handleGlobalDragMove);
+                window.addEventListener('mouseup', handleGlobalDragUp);
+                return;
             }
 
             // Eraser Tool Drag
@@ -389,7 +406,10 @@ export const CanvasContainer: React.FC = () => {
             // Actually, sticking to movementX is safer for persistent dragging
             const worldDelta = new Vec2D(e.movementX / t.a, e.movementY / t.d);
 
-            if (dragItem.current.type === 'selection') {
+            if (dragItem.current.type === 'selection' && activeTool === 'pan') {
+                // Pan: translate the view
+                engineRef.current.pan(new Vec2D(e.movementX, e.movementY));
+            } else if (dragItem.current.type === 'selection') {
                 dragItem.current.ids.forEach(id => {
                     const atom = molecule.atoms.get(id);
                     if (atom) {
@@ -405,6 +425,25 @@ export const CanvasContainer: React.FC = () => {
                     const y = e.clientY - rect.top;
                     const currentWorldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
                     engineRef.current.setRubberBand(dragStartWorldPos.current, currentWorldPos);
+                }
+            } else if (dragItem.current.type === 'selection-lasso') {
+                const page = document.querySelector('.document-page');
+                if (page) {
+                    const rect = page.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    const currentWorldPos = engineRef.current.screenToWorld(new Vec2D(x, y));
+
+                    // We need to append to the path. We must access the private path somehow, or just store it in dragItem
+                    const dItem = dragItem.current as any;
+                    if (!dItem.path) dItem.path = [dragStartWorldPos.current];
+
+                    // Add point if moved far enough
+                    const lastPoint = dItem.path[dItem.path.length - 1];
+                    if (lastPoint.distance(currentWorldPos) > 4) {
+                        dItem.path.push(currentWorldPos);
+                        engineRef.current.setLassoPath(dItem.path);
+                    }
                 }
             } else if (dragItem.current.type === 'arrow-create') {
                 // Temp Arrow
@@ -606,6 +645,48 @@ export const CanvasContainer: React.FC = () => {
                     });
 
                     // Additive if shift/ctrl is held when rubber banding? Standard says replace unless held. We'll replace for generic rubberband.
+                    useCanvasStore.getState().setSelected(newSelectedAtoms, newSelectedBonds);
+                }
+            } else if (dragItem.current.type === 'selection-lasso') {
+                engineRef.current.setLassoPath([]);
+                const dItem = dragItem.current as any;
+                const path = dItem.path as Vec2D[] || [];
+
+                if (path.length > 2) {
+                    const newSelectedAtoms: string[] = [];
+                    const newSelectedBonds: string[] = [];
+
+                    // Point-in-polygon algorithm (Ray-casting)
+                    const isPointInPolygon = (point: Vec2D, vs: Vec2D[]) => {
+                        let x = point.x, y = point.y;
+                        let inside = false;
+                        for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+                            let xi = vs[i].x, yi = vs[i].y;
+                            let xj = vs[j].x, yj = vs[j].y;
+                            let intersect = ((yi > y) !== (yj > y))
+                                && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                            if (intersect) inside = !inside;
+                        }
+                        return inside;
+                    };
+
+                    molecule.atoms.forEach((atom: Atom) => {
+                        if (isPointInPolygon(atom.pos, path)) {
+                            newSelectedAtoms.push(atom.id);
+                        }
+                    });
+
+                    molecule.bonds.forEach((bond: Bond) => {
+                        const atomA = molecule.atoms.get(bond.atomA);
+                        const atomB = molecule.atoms.get(bond.atomB);
+                        if (atomA && atomB) {
+                            // Select bond if both atoms are inside
+                            if (isPointInPolygon(atomA.pos, path) && isPointInPolygon(atomB.pos, path)) {
+                                newSelectedBonds.push(bond.id);
+                            }
+                        }
+                    });
+
                     useCanvasStore.getState().setSelected(newSelectedAtoms, newSelectedBonds);
                 }
             } else if (dragItem.current.type === 'bond-create') {
@@ -814,6 +895,12 @@ export const CanvasContainer: React.FC = () => {
             }
 
             if (engineRef.current) {
+                // Home key = center on molecule
+                if (e.key === 'Home') {
+                    e.preventDefault();
+                    engineRef.current.centerOnMolecule();
+                    return;
+                }
                 engineRef.current.handleKeyDown(e);
             }
         };

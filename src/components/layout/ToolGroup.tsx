@@ -12,8 +12,10 @@ interface ToolGroupProps {
         label: string;
         shortcut?: string;
     }>;
+    popupId?: string; // For rich HTML popups
     onSelect: (id: string, subToolId?: string) => void;
     onSubToolSelect?: (subToolId: string) => void;
+    onPopupOpen?: (popupId: string, rect: DOMRect) => void;
 }
 
 export const ToolGroup: React.FC<ToolGroupProps> = ({
@@ -23,7 +25,9 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({
     isActive,
     activeSubToolId,
     subTools,
+    popupId,
     onSelect,
+    onPopupOpen
 }) => {
     const [isHovered, setIsHovered] = useState(false);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -68,7 +72,11 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({
 
     const handleCornerClick = (e: React.MouseEvent) => {
         e.stopPropagation();
-        setIsMenuOpen(!isMenuOpen);
+        if (popupId && onPopupOpen && menuRef.current) {
+            onPopupOpen(popupId, menuRef.current.getBoundingClientRect());
+        } else {
+            setIsMenuOpen(!isMenuOpen);
+        }
     };
 
     const handleSubToolClick = (subId: string, e: React.MouseEvent) => {
@@ -120,8 +128,8 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({
                 />
                 <DisplayIcon size={20} strokeWidth={isActive ? 2 : 1.5} style={{ position: 'relative', zIndex: 1 }} />
 
-                {/* Corner Triangle for Sub-menu */}
-                {subTools && subTools.length > 0 && (
+                {/* Corner Triangle for Sub-menu or Popups */}
+                {((subTools && subTools.length > 0) || popupId) && (
                     <div
                         onClick={handleCornerClick}
                         style={{

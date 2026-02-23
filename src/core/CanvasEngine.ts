@@ -46,6 +46,19 @@ const FUNCTIONAL_GROUPS: Record<string, string> = {
     'group-ts': 'Ts',
     'group-ms': 'Ms',
     'group-tf': 'Tf',
+    'group-oh': 'OH',
+    'group-nh2': 'NH2',
+    'group-cooh': 'COOH',
+    'group-cho': 'CHO',
+    'group-no2': 'NO2',
+    'group-cn': 'CN',
+    'group-ome': 'OMe',
+    'group-nme2': 'NMe2',
+    'group-so3h': 'SO3H',
+    'group-cf3': 'CF3',
+    'group-coor': 'COOR',
+    'group-cocl': 'COCl',
+    'group-tbdms': 'TBDMS',
 };
 
 export class CanvasEngine {
@@ -76,7 +89,7 @@ export class CanvasEngine {
     private tempBond: { from: Vec2D; to: Vec2D; type: BondType } | null = null;
     private tempArrow: Arrow | null = null;
     private tempEraserPath: Vec2D[] = []; // [NEW] Path for eraser dragging
-
+    private lassoPath: Vec2D[] = []; // [NEW] Path for free-form selection
 
     // Callbacks
     public onAction: ((cmd: any) => void) | null = null;
@@ -219,6 +232,11 @@ export class CanvasEngine {
 
     public setTempEraserPath(path: Vec2D[]) {
         this.tempEraserPath = path;
+        this.invalidate();
+    }
+
+    public setLassoPath(path: Vec2D[]) {
+        this.lassoPath = path;
         this.invalidate();
     }
 
@@ -380,6 +398,25 @@ export class CanvasEngine {
 
     private drawPreview(ctx: CanvasRenderingContext2D) {
         const scale = this.transform.a;
+
+        // Lasso Tool Preview
+        if ((this.activeTool === 'select' || this.activeTool === 'lasso') && this.lassoPath.length > 0) {
+            ctx.strokeStyle = '#2E86C1';
+            ctx.lineWidth = 1 / scale;
+            ctx.setLineDash([4 / scale, 4 / scale]);
+            ctx.fillStyle = 'rgba(46, 134, 193, 0.1)';
+
+            ctx.beginPath();
+            ctx.moveTo(this.lassoPath[0].x, this.lassoPath[0].y);
+            for (let i = 1; i < this.lassoPath.length; i++) {
+                ctx.lineTo(this.lassoPath[i].x, this.lassoPath[i].y);
+            }
+            // Close the path visually
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
 
         // Eraser trail & hover
         if (this.activeTool === 'erase') {
@@ -861,6 +898,52 @@ export class CanvasEngine {
         this.invalidate();
     }
 
+    /**
+     * Center the view on the current molecule, fitting it to the canvas
+     * with a comfortable margin. If no atoms exist, resets to identity.
+     */
+    public centerOnMolecule() {
+        if (!this.molecule || this.molecule.atoms.size === 0) {
+            // No molecule — reset to center of canvas
+            this.transform = Matrix2D.identity();
+            this.transform.e = this.width / 2;
+            this.transform.f = this.height / 2;
+            this.invalidate();
+            return;
+        }
+
+        // Calculate bounding box of all atoms in world coordinates
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const atom of this.molecule.atoms.values()) {
+            if (atom.pos.x < minX) minX = atom.pos.x;
+            if (atom.pos.y < minY) minY = atom.pos.y;
+            if (atom.pos.x > maxX) maxX = atom.pos.x;
+            if (atom.pos.y > maxY) maxY = atom.pos.y;
+        }
+
+        const molWidth = maxX - minX;
+        const molHeight = maxY - minY;
+        const molCenterX = (minX + maxX) / 2;
+        const molCenterY = (minY + maxY) / 2;
+
+        // Calculate scale to fit with 20% margin
+        const margin = 0.8; // 80% of canvas used
+        const scaleX = molWidth > 0 ? (this.width * margin) / molWidth : 1;
+        const scaleY = molHeight > 0 ? (this.height * margin) / molHeight : 1;
+        let scale = Math.min(scaleX, scaleY);
+
+        // Clamp scale to reasonable range
+        scale = Math.max(0.2, Math.min(scale, 3.0));
+
+        // Set transform so molecule center maps to canvas center
+        this.transform.a = scale;
+        this.transform.d = scale;
+        this.transform.e = this.width / 2 - molCenterX * scale;
+        this.transform.f = this.height / 2 - molCenterY * scale;
+
+        this.invalidate();
+    }
+
     public screenToWorld(point: Vec2D): Vec2D {
         return this.transform.inverse().transformPoint(point);
     }
@@ -1005,7 +1088,8 @@ export class CanvasEngine {
                 }
             }
 
-            const cmd = new AddRingCommand(this.molecule, { points, fusionAtoms });
+            const isAromatic = this.activeTool === 'BENZENE';
+            const cmd = new AddRingCommand(this.molecule, { points, fusionAtoms, isAromatic });
 
             if (this.onAction) {
                 this.onAction(cmd);
@@ -1016,11 +1100,21 @@ export class CanvasEngine {
             return;
         }
 
-        // Handle Bond Tool Click on Empty Space (create atom + bond from scratch)
+        // Handle Bond Tool Click on Empty Space or Existing Atom
         if (this.activeTool.startsWith('BOND_') || this.activeTool === 'bond') {
             const worldPoint = this.screenToWorld(screenPoint);
 
-            // Check if clicking an existing atom — if so, toggle bond type
+            // Determine bond type from active tool
+            let bondType: any = 'SINGLE';
+            let order = 1;
+            if (this.activeTool === 'BOND_DOUBLE') { bondType = 'DOUBLE'; order = 2; }
+            else if (this.activeTool === 'BOND_TRIPLE') { bondType = 'TRIPLE'; order = 3; }
+            else if (this.activeTool === 'BOND_WEDGE_SOLID') bondType = BondType.WEDGE_SOLID;
+            else if (this.activeTool === 'BOND_WEDGE_HASH') bondType = BondType.WEDGE_HASH;
+            else if (this.activeTool === 'BOND_DATIVE') bondType = BondType.DATIVE;
+            else if (this.activeTool === 'BOND_WAVY') bondType = BondType.WAVY;
+
+            // Check if clicking an existing atom
             let hitAtom = null;
             for (const atom of this.molecule.atoms.values()) {
                 if (atom.pos.distance(worldPoint) < 10) {
@@ -1029,11 +1123,68 @@ export class CanvasEngine {
                 }
             }
 
-            if (!hitAtom) {
-                // Create two atoms + a bond from scratch
-                const style = this.style;
-                const bondLen = style?.bondLength || 40;
-                // Default bond direction: 30° from horizontal (standard chemistry convention)
+            const style = this.style;
+            const bondLen = style?.bondLength || 40;
+
+            if (hitAtom) {
+                // ── BOND SNAP: Find the best open direction ──
+                // Gather all existing bond angles from this atom
+                const existingAngles: number[] = [];
+                for (const bond of this.molecule.bonds.values()) {
+                    let otherAtomId: string | null = null;
+                    if (bond.atomA === hitAtom.id) otherAtomId = bond.atomB;
+                    else if (bond.atomB === hitAtom.id) otherAtomId = bond.atomA;
+
+                    if (otherAtomId) {
+                        const otherAtom = this.molecule.atoms.get(otherAtomId);
+                        if (otherAtom) {
+                            const dx = otherAtom.pos.x - hitAtom.pos.x;
+                            const dy = otherAtom.pos.y - hitAtom.pos.y;
+                            existingAngles.push(Math.atan2(dy, dx));
+                        }
+                    }
+                }
+
+                let newAngle: number;
+
+                if (existingAngles.length === 0) {
+                    // No bonds yet — default to -30° (upward-right, chemistry convention)
+                    newAngle = -Math.PI / 6;
+                } else if (existingAngles.length === 1) {
+                    // One bond: place at 120° from existing bond (sp2 convention)
+                    newAngle = existingAngles[0] + (2 * Math.PI / 3);
+                } else {
+                    // Multiple bonds: find the largest angular gap and bisect it
+                    const sorted = existingAngles.sort((a, b) => a - b);
+                    let maxGap = -1;
+                    let bestMidAngle = 0;
+
+                    for (let i = 0; i < sorted.length; i++) {
+                        const next = (i + 1) % sorted.length;
+                        let gap = sorted[next] - sorted[i];
+                        if (gap <= 0) gap += 2 * Math.PI; // wrap around
+
+                        if (gap > maxGap) {
+                            maxGap = gap;
+                            bestMidAngle = sorted[i] + gap / 2;
+                        }
+                    }
+                    newAngle = bestMidAngle;
+                }
+
+                // Create new atom at the computed angle
+                const endPos = new Vec2D(
+                    hitAtom.pos.x + bondLen * Math.cos(newAngle),
+                    hitAtom.pos.y + bondLen * Math.sin(newAngle)
+                );
+
+                const atomB = new Atom(crypto.randomUUID(), 'C', endPos);
+                this.molecule.addAtom(atomB);
+                const newBond = new Bond(crypto.randomUUID(), hitAtom.id, atomB.id, order, bondType);
+                this.molecule.addBond(newBond);
+                this.invalidate();
+            } else {
+                // Create two atoms + a bond from scratch on empty space
                 const angle = -Math.PI / 6; // -30° = upward right
                 const startPos = worldPoint;
                 const endPos = new Vec2D(
@@ -1041,16 +1192,6 @@ export class CanvasEngine {
                     worldPoint.y + bondLen * Math.sin(angle)
                 );
 
-                let bondType: any = 'SINGLE';
-                let order = 1;
-                if (this.activeTool === 'BOND_DOUBLE') { bondType = 'DOUBLE'; order = 2; }
-                else if (this.activeTool === 'BOND_TRIPLE') { bondType = 'TRIPLE'; order = 3; }
-                else if (this.activeTool === 'BOND_WEDGE_SOLID') bondType = BondType.WEDGE_SOLID;
-                else if (this.activeTool === 'BOND_WEDGE_HASH') bondType = BondType.WEDGE_HASH;
-                else if (this.activeTool === 'BOND_DATIVE') bondType = BondType.DATIVE;
-                else if (this.activeTool === 'BOND_WAVY') bondType = BondType.WAVY;
-
-                // Directly add atoms and bond to molecule
                 const atomA = new Atom(crypto.randomUUID(), 'C', startPos);
                 const atomB = new Atom(crypto.randomUUID(), 'C', endPos);
                 this.molecule.addAtom(atomA);
@@ -1145,7 +1286,7 @@ export class CanvasEngine {
         }
 
         // Handle Selection
-        if (this.activeTool === 'select') {
+        if (this.activeTool === 'select' || this.activeTool === 'lasso') {
             let selectedAtoms: string[] = isAdditive ? Array.from(this.selectedAtomIds) : [];
             let selectedBonds: string[] = isAdditive ? Array.from(this.selectedBondIds) : [];
 

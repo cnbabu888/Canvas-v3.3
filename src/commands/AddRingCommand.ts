@@ -7,6 +7,7 @@ import { Vec2D } from '../math/Vec2D';
 interface RingData {
     points: Vec2D[];
     fusionAtoms?: { index: number, atomId: string }[]; // connect ring vertex 'index' to existing 'atomId'
+    isAromatic?: boolean; // If true, create alternating double bonds (benzene-style)
 }
 
 export class AddRingCommand implements Command {
@@ -51,8 +52,11 @@ export class AddRingCommand implements Command {
             const existingBond = this.findBond(idA, idB);
             if (!existingBond) {
                 const id = crypto.randomUUID();
-                // Bond(id, atomA, atomB, order, type)
-                const bond = new Bond(id, idA, idB, 1, 'SINGLE');
+                // Aromatic: alternate double bonds at even indices (0, 2, 4)
+                const isDoubleBond = this.ringData.isAromatic && (i % 2 === 0);
+                const order = isDoubleBond ? 2 : 1;
+                const type = isDoubleBond ? 'DOUBLE' : 'SINGLE';
+                const bond = new Bond(id, idA, idB, order, type);
                 this.molecule.addBond(bond);
                 this.createdBondIds.push(bond.id);
             }

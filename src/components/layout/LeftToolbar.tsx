@@ -1,62 +1,66 @@
-import React, { useEffect } from 'react';
-import {
-    MousePointer2,
-    Eraser,
-    Type,
-    Hexagon,
-    ArrowRight,
-    CirclePlus,
-    Brackets,
-    Shapes,
-    Table,
-    PenTool,
-    Library,
-    FlaskConical,
-    Hand,
-    Lasso,
-    ScanLine,
-    Orbit,
-    Beaker,
-    TestTube,
-    FlaskRound,
-    Link2,
-    Scissors
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { ToolGroup } from './ToolGroup';
+import { RichToolPopups } from './RichToolPopups';
 import {
-    BenzeneIcon,
+    BoxSelectIcon,
+    LassoSelectIcon,
+    EraserIcon,
+    ScissorIcon,
+    TextIcon,
     SingleBondIcon,
     DoubleBondIcon,
     TripleBondIcon,
     WedgeBondIcon,
     HashBondIcon,
+    MechanismArrowIcon,
+    BenzeneIcon,
+    TemplatesIcon,
+    ReactionArrowIcon,
+    EquilibriumArrowIcon,
+    ChargeIcon,
+    BracketsIcon,
+    OrbitalsIcon,
     OrbitalSIcon,
     OrbitalPIcon,
-    ReactionArrowIcon,
-    EquilibriumArrowIcon
+    TableIcon,
+    AtomLabelIcon,
+    ColorIcon,
+    SymmetryIcon,
+    SafetyIcon,
+    PanIcon,
+    AIActionsIcon,
 } from '../../icons/ChemistryIcons';
+import {
+    ArrowRight,
+    Link2,
+    CirclePlus,
+    Hexagon,
+    Type,
+    Orbit,
+} from 'lucide-react';
 
-// --- Tool Definitions ---
+// --- Tool Definitions (2-column × 10 row layout) ---
 
 const TOOLS = [
-    // 1. Selection (V)
+    // Row 1: Selection tools
     {
-        id: 'select', icon: MousePointer2, label: 'Selection (V)', shortcut: 'V',
+        id: 'select', icon: BoxSelectIcon, label: 'Box Select (V)', shortcut: 'V',
         subTools: [
-            { id: 'select-lasso', icon: Lasso, label: 'Lasso Select' },
-            { id: 'select-marquee', icon: ScanLine, label: 'Marquee Select' },
+            { id: 'select-lasso', icon: LassoSelectIcon, label: 'Lasso Select (L)', shortcut: 'L' },
         ]
     },
-    // 2. Eraser (E)
-    { id: 'erase', icon: Eraser, label: 'Eraser (E)', shortcut: 'E' },
-    // 3. Scissor (X)
-    { id: 'scissor', icon: Scissors, label: 'Scissor (X)', shortcut: 'X' },
-    // 3. Text (T)
-    { id: 'text', icon: Type, label: 'Text (T)', shortcut: 'T' },
-    // 4. Bond (B)
+    { id: 'lasso', icon: LassoSelectIcon, label: 'Lasso Select (L)', shortcut: 'L' },
+
+    // Row 2: Erase tools
+    { id: 'erase', icon: EraserIcon, label: 'Eraser (E)', shortcut: 'E' },
+    { id: 'scissor', icon: ScissorIcon, label: 'Scissor (X)', shortcut: 'X' },
+
+    // Row 3: Text & Bond
+    { id: 'text', icon: TextIcon, label: 'Text (T)', shortcut: 'T', popupId: 'atoms-popup' },
     {
         id: 'bond', icon: SingleBondIcon, label: 'Bonds (B)', shortcut: 'B',
+        popupId: 'bonds-popup',
         subTools: [
             { id: 'BOND_SINGLE', icon: SingleBondIcon, label: 'Single Bond' },
             { id: 'BOND_DOUBLE', icon: DoubleBondIcon, label: 'Double Bond' },
@@ -72,26 +76,29 @@ const TOOLS = [
             { id: 'BOND_IONIC', icon: Link2, label: 'Ionic Bond' },
         ]
     },
-    // 5. Chain (C)
-    { id: 'chain', icon: Link2, label: 'Chain (C)', shortcut: 'C' },
-    // 6. Ring (R)
+
+    // Row 4: Mechanism Arrow & Ring
+    { id: 'mechanism', icon: MechanismArrowIcon, label: 'Mechanism Arrow', shortcut: 'M' },
     {
         id: 'ring', icon: BenzeneIcon, label: 'Rings (R)', shortcut: 'R',
+        popupId: 'rings-popup',
         subTools: [
             { id: 'BENZENE', icon: BenzeneIcon, label: 'Benzene' },
             { id: 'RING_3', icon: Hexagon, label: 'Cyclopropane' },
             { id: 'RING_4', icon: Hexagon, label: 'Cyclobutane' },
             { id: 'RING_5', icon: Hexagon, label: 'Cyclopentane' },
-            { id: 'RING_6', icon: Hexagon, label: 'Cyclohexane' }, // Keep only one
+            { id: 'RING_6', icon: Hexagon, label: 'Cyclohexane' },
             { id: 'RING_7', icon: Hexagon, label: 'Cycloheptane' },
             { id: 'RING_8', icon: Hexagon, label: 'Cyclooctane' },
             { id: 'RING_NAPHTHALENE', icon: BenzeneIcon, label: 'Naphthalene' },
             { id: 'RING_ANTHRACENE', icon: BenzeneIcon, label: 'Anthracene' },
         ]
     },
-    // 7. Functional Groups
+
+    // Row 5: Templates & Reaction Arrow
     {
-        id: 'groups', icon: FlaskRound, label: 'Functional Groups',
+        id: 'groups', icon: TemplatesIcon, label: 'Functional Groups',
+        popupId: 'fg-popup',
         subTools: [
             { id: 'group-me', icon: Type, label: '-Me (Methyl)' },
             { id: 'group-et', icon: Type, label: '-Et (Ethyl)' },
@@ -99,35 +106,25 @@ const TOOLS = [
             { id: 'group-tbu', icon: Type, label: '-tBu (tert-Butyl)' },
             { id: 'group-ph', icon: Type, label: '-Ph (Phenyl)' },
             { id: 'group-bn', icon: Type, label: '-Bn (Benzyl)' },
-            { id: 'group-ac', icon: Type, label: '-Ac (Acetyl)' },
-            { id: 'group-boc', icon: Type, label: '-Boc (t-Butoxycarbonyl)' },
-            { id: 'group-ts', icon: Type, label: '-Ts (Tosyl)' },
-            { id: 'group-ms', icon: Type, label: '-Ms (Mesyl)' },
-            { id: 'group-tf', icon: Type, label: '-Tf (Triflyl)' },
         ]
     },
-    // 8. Reaction (W)
     {
         id: 'reaction', icon: ReactionArrowIcon, label: 'Arrows (W)', shortcut: 'W',
+        popupId: 'arrows-popup',
         subTools: [
             { id: 'arrow-synthesis', icon: ReactionArrowIcon, label: 'Synthesis Arrow' },
             { id: 'arrow-equilibrium', icon: EquilibriumArrowIcon, label: 'Equilibrium Arrow' },
             { id: 'arrow-mechanism', icon: ArrowRight, label: 'Mechanism Arrow' },
         ]
     },
-    // --- separator ---
-    // 9. Attributes (A)
-    { id: 'attributes', icon: CirclePlus, label: 'Attributes (A)', shortcut: 'A' },
-    // 10. Brackets
-    { id: 'brackets', icon: Brackets, label: 'Brackets' },
-    // 11. Shapes (S)
-    { id: 'shapes', icon: Shapes, label: 'Shapes (S)', shortcut: 'S' },
-    // 12. Table
-    { id: 'table', icon: Table, label: 'Table' },
-    // --- separator ---
-    // 13. Orbitals
+
+    // Row 6: Charge & Brackets
+    { id: 'attributes', icon: ChargeIcon, label: 'Charge (A)', shortcut: 'A' },
+    { id: 'brackets', icon: BracketsIcon, label: 'Brackets' },
+
+    // Row 7: Orbitals & Table
     {
-        id: 'orbitals', icon: OrbitalPIcon, label: 'Orbitals',
+        id: 'orbitals', icon: OrbitalsIcon, label: 'Orbitals',
         subTools: [
             { id: 'orbital-s', icon: OrbitalSIcon, label: 's-Orbital' },
             { id: 'orbital-p', icon: OrbitalPIcon, label: 'p-Orbital' },
@@ -135,30 +132,31 @@ const TOOLS = [
             { id: 'orbital-hybrid', icon: Orbit, label: 'Hybrid Orbital' },
         ]
     },
-    // 14. Pen
-    { id: 'pen', icon: PenTool, label: 'Pen Tool' },
-    // 15. Template
-    { id: 'template', icon: Library, label: 'Templates' },
-    // 16. Lab Art
-    {
-        id: 'labart', icon: FlaskConical, label: 'Lab Art',
-        subTools: [
-            { id: 'art-beaker', icon: Beaker, label: 'Beaker' },
-            { id: 'art-flask', icon: FlaskConical, label: 'Erlenmeyer Flask' },
-            { id: 'art-testtube', icon: TestTube, label: 'Test Tube' },
-        ]
-    },
-    // 17. Pan (Hand)
-    { id: 'pan', icon: Hand, label: 'Pan Canvas' },
+    { id: 'table', icon: TableIcon, label: 'Table' },
+
+    // Row 8: Atom Label & Color
+    { id: 'atomlabel', icon: AtomLabelIcon, label: 'Atom Label', popupId: 'atoms-popup' },
+    { id: 'color', icon: ColorIcon, label: 'Color/Highlight' },
+
+    // Row 9: Symmetry & Safety/GHS
+    { id: 'symmetry', icon: SymmetryIcon, label: 'Symmetry' },
+    { id: 'safety', icon: SafetyIcon, label: 'Safety/GHS' },
+
+    // Row 10: Pan & AI Actions
+    { id: 'pan', icon: PanIcon, label: 'Pan Canvas' },
+    { id: 'ai', icon: AIActionsIcon, label: 'AI Actions' },
 ];
 
-// Separator indices: after index 3 (Scissor), 9 (Arrows), 13 (Table)
-const SEPARATOR_BEFORE = new Set([4, 9, 13]);
+// Separator indices: after rows 2, 5, 7
+const SEPARATOR_BEFORE = new Set([4, 10, 14]);
 
 export const LeftToolbar: React.FC = () => {
     const activeTool = useCanvasStore((state) => state.activeTool);
     const activeSubTool = useCanvasStore((state) => state.activeSubTool);
     const setActiveTool = useCanvasStore((state) => state.setActiveTool);
+
+    const [activePopup, setActivePopup] = useState<string | null>(null);
+    const [popupPos, setPopupPos] = useState<{ top: number, left: number } | null>(null);
 
     // Keyboard Shortcuts
     useEffect(() => {
@@ -178,6 +176,15 @@ export const LeftToolbar: React.FC = () => {
 
     const handleSelect = (toolId: string, subToolId?: string) => {
         setActiveTool(toolId, subToolId);
+        setActivePopup(null);
+    };
+
+    const handlePopupOpen = (popupId: string, rect: DOMRect) => {
+        setPopupPos({
+            top: Math.min(rect.top, window.innerHeight - 300),
+            left: rect.right + 8
+        });
+        setActivePopup(popupId);
     };
 
     return (
@@ -185,7 +192,7 @@ export const LeftToolbar: React.FC = () => {
             className="h-full flex flex-col border-r border-gray-300 select-none"
             style={{ width: '76px', minWidth: '76px', backgroundColor: '#f0f0f0', zIndex: 50 }}
         >
-            {/* Scrollable Tool Area - Overflow Visible for Popups */}
+            {/* Scrollable Tool Area */}
             <div
                 className="flex-1"
                 style={{ scrollbarWidth: 'none', overflow: 'visible' }}
@@ -210,12 +217,22 @@ export const LeftToolbar: React.FC = () => {
                                 isActive={activeTool === tool.id}
                                 activeSubToolId={activeSubTool}
                                 subTools={tool.subTools}
+                                popupId={tool.popupId}
                                 onSelect={handleSelect}
+                                onPopupOpen={handlePopupOpen}
                             />
                         </React.Fragment>
                     ))}
                 </div>
             </div>
+
+            <RichToolPopups
+                activePopup={activePopup}
+                activeSubToolId={activeSubTool}
+                onClose={() => setActivePopup(null)}
+                onSelectTool={handleSelect}
+                style={popupPos ? { top: popupPos.top, left: popupPos.left } : undefined}
+            />
         </div>
     );
 };
