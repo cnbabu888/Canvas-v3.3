@@ -68,6 +68,10 @@ export const ToolGroup: React.FC<ToolGroupProps> = ({
 
     const handleMainClick = () => {
         onSelect(id);
+        // If this tool has a popup, also open it immediately on main click
+        if (popupId && onPopupOpen && menuRef.current) {
+            onPopupOpen(popupId, menuRef.current.getBoundingClientRect());
+        }
     };
 
     const handleCornerClick = (e: React.MouseEvent) => {

@@ -78,7 +78,16 @@ const TOOLS = [
     },
 
     // Row 4: Mechanism Arrow & Ring
-    { id: 'mechanism', icon: MechanismArrowIcon, label: 'Mechanism Arrow', shortcut: 'M' },
+    {
+        id: 'mechanism', icon: MechanismArrowIcon, label: 'Mechanism Arrow', shortcut: 'M',
+        popupId: 'mechanism-popup',
+        subTools: [
+            { id: 'mech-full', icon: MechanismArrowIcon, label: 'Full Arrow (2e⁻)' },
+            { id: 'mech-fishhook', icon: MechanismArrowIcon, label: 'Fishhook (1e⁻)' },
+            { id: 'mech-double', icon: MechanismArrowIcon, label: 'Double-headed' },
+            { id: 'mech-retro', icon: MechanismArrowIcon, label: 'Retro Push' },
+        ]
+    },
     {
         id: 'ring', icon: BenzeneIcon, label: 'Rings (R)', shortcut: 'R',
         popupId: 'rings-popup',
@@ -114,17 +123,34 @@ const TOOLS = [
         subTools: [
             { id: 'arrow-synthesis', icon: ReactionArrowIcon, label: 'Synthesis Arrow' },
             { id: 'arrow-equilibrium', icon: EquilibriumArrowIcon, label: 'Equilibrium Arrow' },
-            { id: 'arrow-mechanism', icon: ArrowRight, label: 'Mechanism Arrow' },
+            { id: 'arrow-retro', icon: ArrowRight, label: 'Retrosynthesis Arrow' },
         ]
     },
 
     // Row 6: Charge & Brackets
-    { id: 'attributes', icon: ChargeIcon, label: 'Charge (A)', shortcut: 'A' },
-    { id: 'brackets', icon: BracketsIcon, label: 'Brackets' },
+    {
+        id: 'attributes', icon: ChargeIcon, label: 'Charge (A)', shortcut: 'A',
+        popupId: 'charges-popup',
+        subTools: [
+            { id: 'charge-plus', icon: ChargeIcon, label: 'Positive (+)' },
+            { id: 'charge-minus', icon: ChargeIcon, label: 'Negative (−)' },
+            { id: 'charge-radical', icon: ChargeIcon, label: 'Radical (•)' },
+        ]
+    },
+    {
+        id: 'brackets', icon: BracketsIcon, label: 'Brackets',
+        popupId: 'brackets-popup',
+        subTools: [
+            { id: 'bracket-square', icon: BracketsIcon, label: 'Square [ ]' },
+            { id: 'bracket-round', icon: BracketsIcon, label: 'Round ( )' },
+            { id: 'bracket-curly', icon: BracketsIcon, label: 'Curly { }' },
+        ]
+    },
 
     // Row 7: Orbitals & Table
     {
         id: 'orbitals', icon: OrbitalsIcon, label: 'Orbitals',
+        popupId: 'orbitals-popup',
         subTools: [
             { id: 'orbital-s', icon: OrbitalSIcon, label: 's-Orbital' },
             { id: 'orbital-p', icon: OrbitalPIcon, label: 'p-Orbital' },
@@ -136,11 +162,33 @@ const TOOLS = [
 
     // Row 8: Atom Label & Color
     { id: 'atomlabel', icon: AtomLabelIcon, label: 'Atom Label', popupId: 'atoms-popup' },
-    { id: 'color', icon: ColorIcon, label: 'Color/Highlight' },
+    {
+        id: 'color', icon: ColorIcon, label: 'Color/Highlight',
+        popupId: 'color-popup',
+        subTools: [
+            { id: 'color-red', icon: ColorIcon, label: 'Red' },
+            { id: 'color-blue', icon: ColorIcon, label: 'Blue' },
+            { id: 'color-green', icon: ColorIcon, label: 'Green' },
+        ]
+    },
 
     // Row 9: Symmetry & Safety/GHS
-    { id: 'symmetry', icon: SymmetryIcon, label: 'Symmetry' },
-    { id: 'safety', icon: SafetyIcon, label: 'Safety/GHS' },
+    {
+        id: 'symmetry', icon: SymmetryIcon, label: 'Symmetry',
+        popupId: 'symmetry-popup',
+        subTools: [
+            { id: 'sym-mirror', icon: SymmetryIcon, label: 'Mirror Plane' },
+            { id: 'sym-rotation', icon: SymmetryIcon, label: 'Rotation Axis' },
+        ]
+    },
+    {
+        id: 'safety', icon: SafetyIcon, label: 'Safety/GHS',
+        popupId: 'safety-popup',
+        subTools: [
+            { id: 'ghs-flame', icon: SafetyIcon, label: 'Flammable' },
+            { id: 'ghs-skull', icon: SafetyIcon, label: 'Toxic' },
+        ]
+    },
 
     // Row 10: Pan & AI Actions
     { id: 'pan', icon: PanIcon, label: 'Pan Canvas' },

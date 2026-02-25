@@ -27,6 +27,13 @@ const BOND_TOOL_MAP: Record<string, BondType> = {
     'BOND_DATIVE': BondType.DATIVE,
     'BOND_WAVY': BondType.WAVY,
     'BOND_AROMATIC': BondType.RESONANCE,
+    'BOND_BOLD': BondType.BOLD,
+    'BOND_HOLLOW_WEDGE': BondType.HOLLOW_WEDGE,
+    'BOND_QUADRUPLE': BondType.QUADRUPLE,
+    'BOND_HYDROGEN': BondType.HYDROGEN,
+    'BOND_IONIC': BondType.IONIC,
+    'BOND_ZERO_ORDER': BondType.ZERO_ORDER,
+    'BOND_RESONANCE': BondType.RESONANCE,
     'bond': BondType.SINGLE, // Parent group fallback
 };
 
@@ -961,6 +968,59 @@ export const CanvasContainer: React.FC = () => {
             </div>
 
             <TemplatesPanel />
+
+            {/* Floating Center Button */}
+            <button
+                title="Center Canvas (Home)"
+                onClick={() => {
+                    if (engineRef.current) {
+                        setZoom(1.0);
+                        setTimeout(() => {
+                            engineRef.current?.centerOnMolecule();
+                            // Also reset scroll to center
+                            if (containerRef.current) {
+                                const el = containerRef.current;
+                                el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+                                el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
+                            }
+                        }, 50);
+                    }
+                }}
+                style={{
+                    position: 'fixed',
+                    bottom: '48px',
+                    right: '24px',
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(0,0,0,0.1)',
+                    background: 'rgba(255,255,255,0.92)',
+                    backdropFilter: 'blur(12px)',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 50,
+                    transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={e => {
+                    (e.target as HTMLElement).style.transform = 'scale(1.1)';
+                    (e.target as HTMLElement).style.boxShadow = '0 4px 20px rgba(79,70,229,0.25)';
+                }}
+                onMouseLeave={e => {
+                    (e.target as HTMLElement).style.transform = 'scale(1)';
+                    (e.target as HTMLElement).style.boxShadow = '0 2px 12px rgba(0,0,0,0.12)';
+                }}
+            >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <line x1="12" y1="2" x2="12" y2="6" />
+                    <line x1="12" y1="18" x2="12" y2="22" />
+                    <line x1="2" y1="12" x2="6" y2="12" />
+                    <line x1="18" y1="12" x2="22" y2="12" />
+                </svg>
+            </button>
         </div>
     );
 };

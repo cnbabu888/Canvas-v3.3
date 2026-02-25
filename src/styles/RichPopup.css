@@ -331,6 +331,11 @@
     color: var(--text-secondary);
 }
 
+.fg-item.active {
+    background: var(--accent-blue-light);
+    border-color: var(--accent-blue);
+}
+
 /* Arrow Grid */
 .arrow-grid {
     display: grid;
@@ -368,6 +373,11 @@
     text-align: center;
 }
 
+.arrow-item.active {
+    background: var(--accent-blue-light);
+    border-color: var(--accent-blue);
+}
+
 /* Charges/Radicals */
 .charge-grid {
     display: grid;
@@ -394,6 +404,11 @@
 .charge-item:hover {
     background: var(--bg-hover);
     border-color: var(--border-medium);
+}
+
+.charge-item.active {
+    background: var(--accent-blue-light);
+    border-color: var(--accent-blue);
 }
 
 /* Overlay */

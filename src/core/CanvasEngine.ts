@@ -8,9 +8,12 @@ import { Atom } from '../molecular/Atom';
 import { RingGenerator } from '../chem/RingGenerator';
 import { AddRingCommand } from '../commands/AddRingCommand';
 import { AddTemplateCommand } from '../commands/AddTemplateCommand';
+import { AddBondCommand } from '../commands/AddBondCommand';
+import { AddAtomCommand } from '../commands/AddAtomCommand';
 import { StereoEngine, type StereoLabel } from '../chem/StereoEngine';
 import { ChangePropertyCommand } from '../commands/ChangePropertyCommand';
 import { ChemUtils } from '../chem/ChemUtils';
+import { HydrogenManager } from '../chem/HydrogenManager';
 
 import { DEFAULT_STYLE, type CanvasStyle } from '../styles/StyleManager';
 import { LabWareRenderer, type LabWare } from '../chem/LabWare';
@@ -31,7 +34,10 @@ const BOND_TOOL_MAP: Record<string, BondType> = {
     'BOND_QUADRUPLE': BondType.QUADRUPLE,
     'BOND_HYDROGEN': BondType.HYDROGEN,
     'BOND_IONIC': BondType.IONIC,
-    'BOND_HOLLOW_WEDGE': BondType.HOLLOW_WEDGE
+    'BOND_HOLLOW_WEDGE': BondType.HOLLOW_WEDGE,
+    'BOND_BOLD': BondType.BOLD,
+    'BOND_ZERO_ORDER': BondType.ZERO_ORDER,
+    'bond': BondType.SINGLE
 };
 
 const FUNCTIONAL_GROUPS: Record<string, string> = {
@@ -197,6 +203,10 @@ export class CanvasEngine {
 
     public renderMolecule(molecule: any) {
         this.molecule = molecule;
+        // Update implicit hydrogens and valency errors for all atoms
+        if (molecule && molecule.atoms && molecule.atoms.size > 0) {
+            HydrogenManager.updateAll(molecule);
+        }
         this.invalidate();
     }
 
@@ -1127,8 +1137,21 @@ export class CanvasEngine {
             const bondLen = style?.bondLength || 40;
 
             if (hitAtom) {
+                // ── VALENCY CHECK ──
+                // Check if this atom can accept another bond
+                if (!HydrogenManager.canAddBond(hitAtom, this.molecule, order)) {
+                    // Flash error: mark atom as over-valent briefly
+                    hitAtom.hasValencyError = true;
+                    this.invalidate();
+                    // Auto-clear error after 1.2 seconds
+                    setTimeout(() => {
+                        hitAtom.hasValencyError = false;
+                        this.invalidate();
+                    }, 1200);
+                    return;
+                }
+
                 // ── BOND SNAP: Find the best open direction ──
-                // Gather all existing bond angles from this atom
                 const existingAngles: number[] = [];
                 for (const bond of this.molecule.bonds.values()) {
                     let otherAtomId: string | null = null;
@@ -1148,13 +1171,10 @@ export class CanvasEngine {
                 let newAngle: number;
 
                 if (existingAngles.length === 0) {
-                    // No bonds yet — default to -30° (upward-right, chemistry convention)
                     newAngle = -Math.PI / 6;
                 } else if (existingAngles.length === 1) {
-                    // One bond: place at 120° from existing bond (sp2 convention)
                     newAngle = existingAngles[0] + (2 * Math.PI / 3);
                 } else {
-                    // Multiple bonds: find the largest angular gap and bisect it
                     const sorted = existingAngles.sort((a, b) => a - b);
                     let maxGap = -1;
                     let bestMidAngle = 0;
@@ -1162,7 +1182,7 @@ export class CanvasEngine {
                     for (let i = 0; i < sorted.length; i++) {
                         const next = (i + 1) % sorted.length;
                         let gap = sorted[next] - sorted[i];
-                        if (gap <= 0) gap += 2 * Math.PI; // wrap around
+                        if (gap <= 0) gap += 2 * Math.PI;
 
                         if (gap > maxGap) {
                             maxGap = gap;
@@ -1172,20 +1192,31 @@ export class CanvasEngine {
                     newAngle = bestMidAngle;
                 }
 
-                // Create new atom at the computed angle
+                // Create new atom + bond via Commands (undoable)
                 const endPos = new Vec2D(
                     hitAtom.pos.x + bondLen * Math.cos(newAngle),
                     hitAtom.pos.y + bondLen * Math.sin(newAngle)
                 );
 
-                const atomB = new Atom(crypto.randomUUID(), 'C', endPos);
-                this.molecule.addAtom(atomB);
-                const newBond = new Bond(crypto.randomUUID(), hitAtom.id, atomB.id, order, bondType);
-                this.molecule.addBond(newBond);
+                const newAtom = new Atom(crypto.randomUUID(), 'C', endPos);
+                const newBond = new Bond(crypto.randomUUID(), hitAtom.id, newAtom.id, order, bondType);
+
+                // Dispatch via commands for undo support
+                const atomCmd = new AddAtomCommand(this.molecule, newAtom);
+                const bondCmd = new AddBondCommand(this.molecule, newBond);
+                if (this.onAction) {
+                    this.onAction(atomCmd);
+                    this.onAction(bondCmd);
+                } else {
+                    atomCmd.execute();
+                    bondCmd.execute();
+                }
+                // Update implicit H
+                HydrogenManager.updateAffected(this.molecule, [hitAtom.id, newAtom.id]);
                 this.invalidate();
             } else {
                 // Create two atoms + a bond from scratch on empty space
-                const angle = -Math.PI / 6; // -30° = upward right
+                const angle = -Math.PI / 6;
                 const startPos = worldPoint;
                 const endPos = new Vec2D(
                     worldPoint.x + bondLen * Math.cos(angle),
@@ -1194,11 +1225,22 @@ export class CanvasEngine {
 
                 const atomA = new Atom(crypto.randomUUID(), 'C', startPos);
                 const atomB = new Atom(crypto.randomUUID(), 'C', endPos);
-                this.molecule.addAtom(atomA);
-                this.molecule.addAtom(atomB);
-
                 const newBond = new Bond(crypto.randomUUID(), atomA.id, atomB.id, order, bondType);
-                this.molecule.addBond(newBond);
+
+                // Dispatch via commands for undo support
+                const cmdA = new AddAtomCommand(this.molecule, atomA);
+                const cmdB = new AddAtomCommand(this.molecule, atomB);
+                const cmdBond = new AddBondCommand(this.molecule, newBond);
+                if (this.onAction) {
+                    this.onAction(cmdA);
+                    this.onAction(cmdB);
+                    this.onAction(cmdBond);
+                } else {
+                    cmdA.execute();
+                    cmdB.execute();
+                    cmdBond.execute();
+                }
+                HydrogenManager.updateAffected(this.molecule, [atomA.id, atomB.id]);
                 this.invalidate();
             }
             return;

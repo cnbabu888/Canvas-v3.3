@@ -31,10 +31,31 @@ export class AtomRenderer {
         const { x, y } = atom.pos;
 
         // ─── Implicit H calculation ───
-        // implicitH = normalValence - currentBonds - formalCharge
+        // Use pre-calculated implicitHCount if available, otherwise calculate
         let bondOrderSum = 0;
         connectedBonds.forEach(b => bondOrderSum += b.order);
-        const hCount = ChemUtils.getImplicitHydrogens(atom.element, bondOrderSum, atom.charge);
+        const hCount = atom.implicitHCount > 0 ? atom.implicitHCount : ChemUtils.getImplicitHydrogens(atom.element, bondOrderSum, atom.charge);
+
+        // ─── VALENCY ERROR HALO ───
+        // Draw red glow around atoms that exceed their max valence
+        if (atom.hasValencyError) {
+            const errorRadius = (style.atomFontSize * 0.9) / scale;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(x, y, errorRadius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+            ctx.lineWidth = 1.5 / scale;
+            ctx.stroke();
+            // Inner ring
+            ctx.beginPath();
+            ctx.arc(x, y, errorRadius * 0.6, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
+            ctx.lineWidth = 1 / scale;
+            ctx.stroke();
+            ctx.restore();
+        }
 
         // ─── Should we draw the label? ───
         // CARBON RULES:
