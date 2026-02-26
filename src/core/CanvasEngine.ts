@@ -100,6 +100,7 @@ export class CanvasEngine {
     // Callbacks
     public onAction: ((cmd: any) => void) | null = null;
     public onSelect: ((atoms: string[], bonds: string[]) => void) | null = null;
+    public onAtomEdit: ((atomId: string, screenPos: Vec2D) => void) | null = null;
 
     constructor() {
         this.ctx = new Map();
@@ -969,6 +970,26 @@ export class CanvasEngine {
     public handleClick(screenPoint: Vec2D, clickCount: number = 1, isAdditive: boolean = false) {
         if (!this.molecule) return;
 
+        // Handle Atom Label Tool / Text Tool
+        if (this.activeTool === 'atomlabel' || this.activeTool === 'text' || this.activeTool === 'atom') {
+            const worldPoint = this.screenToWorld(screenPoint);
+            let hitAtom = null;
+            for (const atom of this.molecule.atoms.values()) {
+                if (atom.pos.distance(worldPoint) < 10) {
+                    hitAtom = atom;
+                    break;
+                }
+            }
+
+            if (hitAtom) {
+                if (this.onAtomEdit) {
+                    const screenPos = this.worldToScreen(hitAtom.pos);
+                    this.onAtomEdit(hitAtom.id, screenPos);
+                }
+                return;
+            }
+        }
+
         // Handle Eraser Tool
         if (this.activeTool === 'erase') {
             if (this.hoverItem) {
@@ -1489,15 +1510,131 @@ export class CanvasEngine {
     }
 
     public handleKeyDown(e: KeyboardEvent) {
-        if (!this.hoverItem) return;
+        let targetItem = this.hoverItem;
+
+        if (!targetItem) {
+            if (this.selectedAtomIds && this.selectedAtomIds.size === 1 && (!this.selectedBondIds || this.selectedBondIds.size === 0)) {
+                const atomId = Array.from(this.selectedAtomIds)[0];
+                const atom = this.molecule?.atoms.get(atomId);
+                if (atom) targetItem = { type: 'atom', item: atom };
+            } else if (this.selectedBondIds && this.selectedBondIds.size === 1 && (!this.selectedAtomIds || this.selectedAtomIds.size === 0)) {
+                const bondId = Array.from(this.selectedBondIds)[0];
+                const bond = this.molecule?.bonds.get(bondId);
+                if (bond) targetItem = { type: 'bond', item: bond };
+            }
+        }
+
+        if (!targetItem) return;
 
         // Atom Hotkeys
-        if (this.hoverItem.type === 'atom') {
-            const atom = this.hoverItem.item;
+        if (targetItem.type === 'atom') {
+            const atom = targetItem.item;
+            const key = e.key.toLowerCase();
+            const bondLen = this.style?.bondLength || 40;
+
+            // DRAWING KEYS: 1, 2, 3, w, d, 6 (Sprout bond or ring)
+            if (['1', '2', '3', 'w', 'd'].includes(key)) {
+                let order = 1;
+                let bondType = BondType.SINGLE;
+                if (key === '2') { order = 2; bondType = BondType.DOUBLE; }
+                else if (key === '3') { order = 3; bondType = BondType.TRIPLE; }
+                else if (key === 'w') { bondType = BondType.WEDGE_SOLID; }
+                else if (key === 'd') { bondType = BondType.WEDGE_HASH; }
+
+                if (!HydrogenManager.canAddBond(atom, this.molecule, order)) {
+                    atom.hasValencyError = true;
+                    this.invalidate();
+                    setTimeout(() => {
+                        atom.hasValencyError = false;
+                        this.invalidate();
+                    }, 1200);
+                } else {
+                    const existingAngles: number[] = [];
+                    for (const bond of this.molecule.bonds.values()) {
+                        let otherAtomId: string | null = null;
+                        if (bond.atomA === atom.id) otherAtomId = bond.atomB;
+                        else if (bond.atomB === atom.id) otherAtomId = bond.atomA;
+
+                        if (otherAtomId) {
+                            const otherAtom = this.molecule.atoms.get(otherAtomId);
+                            if (otherAtom) {
+                                const dx = otherAtom.pos.x - atom.pos.x;
+                                const dy = otherAtom.pos.y - atom.pos.y;
+                                existingAngles.push(Math.atan2(dy, dx));
+                            }
+                        }
+                    }
+
+                    let newAngle = -Math.PI / 6;
+                    if (existingAngles.length === 1) {
+                        newAngle = existingAngles[0] + (2 * Math.PI / 3);
+                    } else if (existingAngles.length > 1) {
+                        const sorted = existingAngles.sort((a, b) => a - b);
+                        let maxGap = -1;
+                        let bestMidAngle = 0;
+                        for (let i = 0; i < sorted.length; i++) {
+                            const next = (i + 1) % sorted.length;
+                            let gap = sorted[next] - sorted[i];
+                            if (gap <= 0) gap += 2 * Math.PI;
+                            if (gap > maxGap) {
+                                maxGap = gap;
+                                bestMidAngle = sorted[i] + gap / 2;
+                            }
+                        }
+                        newAngle = bestMidAngle;
+                    }
+
+                    const endPos = new Vec2D(
+                        atom.pos.x + bondLen * Math.cos(newAngle),
+                        atom.pos.y + bondLen * Math.sin(newAngle)
+                    );
+
+                    const newAtom = new Atom(crypto.randomUUID(), 'C', endPos);
+                    const newBond = new Bond(crypto.randomUUID(), atom.id, newAtom.id, order, bondType);
+
+                    const cmdA = new AddAtomCommand(this.molecule, newAtom);
+                    const cmdB = new AddBondCommand(this.molecule, newBond);
+                    if (this.onAction) {
+                        this.onAction(cmdA);
+                        this.onAction(cmdB);
+                    } else {
+                        cmdA.execute();
+                        cmdB.execute();
+                    }
+                    HydrogenManager.updateAffected(this.molecule, [atom.id, newAtom.id]);
+                    this.invalidate();
+                }
+                return;
+            } else if (key === '6') {
+                const sides = 6;
+                const existingBonds = this.molecule.getConnectedBonds(atom.id);
+                let angle = -Math.PI / 6;
+                if (existingBonds.length > 0) {
+                    const b = existingBonds[0];
+                    const otherAtomId = b.atomA === atom.id ? b.atomB : b.atomA;
+                    const otherAtom = this.molecule.atoms.get(otherAtomId)!;
+                    const dx = atom.pos.x - otherAtom.pos.x;
+                    const dy = atom.pos.y - otherAtom.pos.y;
+                    angle = Math.atan2(dy, dx);
+                }
+
+                const points = RingGenerator.getSproutedRing(atom.pos, angle, sides, bondLen);
+                const cmd = new AddRingCommand(this.molecule, {
+                    points,
+                    fusionAtoms: [{ index: 0, atomId: atom.id }],
+                    isAromatic: true
+                });
+                if (this.onAction) {
+                    this.onAction(cmd);
+                } else {
+                    cmd.execute();
+                    this.invalidate();
+                }
+                return;
+            }
+
             let newElement = null;
             let newCharge = null;
-
-            const key = e.key.toLowerCase();
 
             // Element Mapping
             const elementMap: { [key: string]: string } = {
@@ -1535,6 +1672,57 @@ export class CanvasEngine {
                     oldValue: atom.charge
                 }]);
                 if (this.onAction) this.onAction(cmd);
+            }
+        } else if (targetItem.type === 'bond') {
+            // Bond Hotkeys
+            const bond = targetItem.item;
+            const key = e.key.toLowerCase();
+
+            if (['1', '2', '3', 'w', 'd'].includes(key)) {
+                let newOrder = 1;
+                let newType = BondType.SINGLE;
+
+                if (key === '2') { newOrder = 2; newType = BondType.DOUBLE; }
+                else if (key === '3') { newOrder = 3; newType = BondType.TRIPLE; }
+                else if (key === 'w') { newType = BondType.WEDGE_SOLID; }
+                else if (key === 'd') { newType = BondType.WEDGE_HASH; }
+
+                if (bond.order !== newOrder || bond.type !== newType) {
+                    const applyChange = () => {
+                        const cmd = new ChangePropertyCommand(this.molecule, [
+                            { type: 'bond', id: bond.id, property: 'order', value: newOrder, oldValue: bond.order },
+                            { type: 'bond', id: bond.id, property: 'type', value: newType, oldValue: bond.type }
+                        ]);
+                        if (this.onAction) this.onAction(cmd);
+                        else {
+                            cmd.execute();
+                            this.invalidate();
+                        }
+                        HydrogenManager.updateAffected(this.molecule, [bond.atomA, bond.atomB]);
+                        this.invalidate();
+                    };
+
+                    if (newOrder > bond.order) {
+                        const atomA = this.molecule.atoms.get(bond.atomA)!;
+                        const atomB = this.molecule.atoms.get(bond.atomB)!;
+                        const orderDiff = newOrder - bond.order;
+                        if (HydrogenManager.canAddBond(atomA, this.molecule, orderDiff) &&
+                            HydrogenManager.canAddBond(atomB, this.molecule, orderDiff)) {
+                            applyChange();
+                        } else {
+                            atomA.hasValencyError = true;
+                            atomB.hasValencyError = true;
+                            this.invalidate();
+                            setTimeout(() => {
+                                atomA.hasValencyError = false;
+                                atomB.hasValencyError = false;
+                                this.invalidate();
+                            }, 1200);
+                        }
+                    } else {
+                        applyChange();
+                    }
+                }
             }
         }
     }

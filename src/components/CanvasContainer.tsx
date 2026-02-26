@@ -64,6 +64,11 @@ export const CanvasContainer: React.FC = () => {
     // pageOrientation is used by store to update pageSize, but not needed here directly
     const pageSize = useCanvasStore((state) => state.pageSize);
     const zoom = useCanvasStore((state) => state.zoom);
+    const setMolecule = useCanvasStore((state) => state.setMolecule);
+
+    // Editing State
+    const [editingAtom, setEditingAtom] = React.useState<{ id: string, pos: Vec2D } | null>(null);
+    const editInputRef = useRef<HTMLInputElement>(null);
 
     // Initialize Engine
     useEffect(() => {
@@ -134,6 +139,10 @@ export const CanvasContainer: React.FC = () => {
                 const { executeCommand } = useCanvasStore.getState();
                 executeCommand(cmd);
             };
+
+            engineRef.current.onAtomEdit = (atomId, screenPos) => {
+                setEditingAtom({ id: atomId, pos: screenPos });
+            };
         }
     }, [activeTool, activeTemplate, setSelected]);
 
@@ -150,6 +159,7 @@ export const CanvasContainer: React.FC = () => {
     const isPanning = useRef(false);
     const panStartMouse = useRef<{ x: number, y: number } | null>(null);
     const panStartScroll = useRef<{ left: number, top: number } | null>(null);
+    const isSpaceDown = useRef(false);
 
     const handleWheel = (e: React.WheelEvent) => {
         // Zoom (Ctrl/Cmd + Wheel or Alt + Wheel)
@@ -163,8 +173,8 @@ export const CanvasContainer: React.FC = () => {
     const handleMouseDown = (e: React.MouseEvent) => {
         if (!engineRef.current || !containerRef.current) return;
 
-        // Middle Mouse or Shift+Left -> PAN
-        if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+        // Middle Mouse or Shift+Left or Space+Left -> PAN
+        if (e.button === 1 || (e.button === 0 && (e.shiftKey || isSpaceDown.current))) {
             e.preventDefault();
             isPanning.current = true;
             panStartMouse.current = { x: e.clientX, y: e.clientY };
@@ -876,7 +886,17 @@ export const CanvasContainer: React.FC = () => {
             const store = useCanvasStore.getState();
 
             // Core selection hotkeys
-            if (e.key === 'Escape') {
+            if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    store.redo();
+                } else {
+                    store.undo();
+                }
+            } else if (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                store.redo();
+            } else if (e.key === 'Escape') {
                 store.clearSelection();
             } else if (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'v') {
                 // If not typing in input, switch to select tool
@@ -901,6 +921,28 @@ export const CanvasContainer: React.FC = () => {
                 }
             }
 
+            // Navigation overrides
+            if (e.key === ' ') {
+                isSpaceDown.current = true;
+                if (!isPanning.current && containerRef.current) {
+                    containerRef.current.style.cursor = 'grab';
+                }
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                const atoms = Array.from(store.molecule.atoms.values());
+                if (atoms.length > 0) {
+                    let nextIndex = 0;
+                    if (store.selectedAtomIds.length > 0) {
+                        const currentId = store.selectedAtomIds[0];
+                        const currentIndex = atoms.findIndex(a => a.id === currentId);
+                        if (currentIndex !== -1) {
+                            nextIndex = e.shiftKey ? (currentIndex - 1 + atoms.length) % atoms.length : (currentIndex + 1) % atoms.length;
+                        }
+                    }
+                    store.setSelected([atoms[nextIndex].id], []);
+                }
+            }
+
             if (engineRef.current) {
                 // Home key = center on molecule
                 if (e.key === 'Home') {
@@ -911,8 +953,22 @@ export const CanvasContainer: React.FC = () => {
                 engineRef.current.handleKeyDown(e);
             }
         };
+
+        const handleKeyUp = (e: KeyboardEvent) => {
+            if (e.key === ' ') {
+                isSpaceDown.current = false;
+                if (!isPanning.current && containerRef.current) {
+                    containerRef.current.style.cursor = 'default';
+                }
+            }
+        };
+
         window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+        };
     }, []);
 
     return (
@@ -1004,14 +1060,6 @@ export const CanvasContainer: React.FC = () => {
                     zIndex: 50,
                     transition: 'all 0.2s ease',
                 }}
-                onMouseEnter={e => {
-                    (e.target as HTMLElement).style.transform = 'scale(1.1)';
-                    (e.target as HTMLElement).style.boxShadow = '0 4px 20px rgba(79,70,229,0.25)';
-                }}
-                onMouseLeave={e => {
-                    (e.target as HTMLElement).style.transform = 'scale(1)';
-                    (e.target as HTMLElement).style.boxShadow = '0 2px 12px rgba(0,0,0,0.12)';
-                }}
             >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="3" />
@@ -1021,6 +1069,66 @@ export const CanvasContainer: React.FC = () => {
                     <line x1="18" y1="12" x2="22" y2="12" />
                 </svg>
             </button>
+
+            {/* Inline Atom Editor */}
+            {editingAtom && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        top: editingAtom.pos.y,
+                        left: editingAtom.pos.x,
+                        transform: 'translate(-50%, -50%)',
+                        zIndex: 1000,
+                    }}
+                >
+                    <input
+                        ref={editInputRef}
+                        autoFocus
+                        defaultValue={molecule.atoms.get(editingAtom.id)?.element || ''}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                const newElement = e.currentTarget.value.trim();
+                                if (newElement) {
+                                    const { molecule, executeCommand } = useCanvasStore.getState();
+                                    const atom = molecule.atoms.get(editingAtom.id);
+                                    if (atom) {
+                                        const { ChangePropertyCommand } = require('../commands/ChangePropertyCommand');
+                                        const { HydrogenManager } = require('../chem/HydrogenManager');
+
+                                        const cmd = new ChangePropertyCommand(molecule, [{
+                                            type: 'atom',
+                                            id: editingAtom.id,
+                                            property: 'element',
+                                            value: newElement,
+                                            oldValue: atom.element
+                                        }]);
+
+                                        executeCommand(cmd);
+                                        HydrogenManager.updateAffected(molecule, [editingAtom.id]);
+                                        engineRef.current?.invalidate();
+                                    }
+                                }
+                                setEditingAtom(null);
+                            } else if (e.key === 'Escape') {
+                                setEditingAtom(null);
+                            }
+                        }}
+                        onBlur={() => setEditingAtom(null)}
+                        style={{
+                            width: '60px',
+                            textAlign: 'center',
+                            fontSize: `${16 * zoom}px`,
+                            fontWeight: 'bold',
+                            border: '2px solid #4f46e5',
+                            borderRadius: '4px',
+                            background: 'white',
+                            outline: 'none',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+                            color: '#1e293b',
+                        }}
+                    />
+                </div>
+            )}
         </div>
     );
 };
